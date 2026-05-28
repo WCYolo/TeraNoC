@@ -458,4 +458,9 @@ module mempool_tb;
  ****************/
 `include "tb_noc_profiling.svh"
 
+/****************************
+ * NoC Traffic Visualization *
+ ****************************/
+`include "tb_noc_visualization.svh"
+
 endmodule : mempool_tb
