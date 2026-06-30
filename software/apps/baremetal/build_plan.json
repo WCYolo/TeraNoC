@@ -44,59 +44,10 @@
   "configs": [
     {
       "name": "terapool",
-      "pack_dir": "terapool",
+      "pack_dir": "tera_torus_shuffle",
       "apps": {
-        "axpy_f32": [
-          {"array_N": 262144}
-        ],
-        "axpy_f16": [
-          {"array_N": 524288}
-        ],
-        "batchnorm_f16": [
-          {"matrix_M": 384, "matrix_N": 2048}
-        ],
-        "cfft_radix4_f16": [
-          {"N_CSAMPLES": 4096}
-        ],
-        "chest_f16": [
-          {"N_TX": 8, "N_RX": 64, "N_SAMPLES": 1024}
-        ],
-        "cholesky_f16": [
-          {"matrix_N": 16, "N_SAMPLES": 1024}
-        ],
-        "dotp_f32": [
-          {"array_N": 262144}
-        ],
-        "dotp_f16": [
-          {"array_N": 524288}
-        ],
-        "gemv_f32": [
-          {"matrix_N": 4096, "matrix_P": 192}
-        ],
-        "gemv_f16": [
-          {"matrix_N": 8192, "matrix_P": 192}
-        ],
-        "layernorm_f16": [
-          {"matrix_M": 2048, "matrix_N": 384}
-        ],
         "matmul_f32": [
-          {"matrix_M": 256, "matrix_N": 256, "matrix_P": 256},
-          {"matrix_M": 256, "matrix_N": 128, "matrix_P": 256},
-          {"matrix_M": 128, "matrix_N": 128, "matrix_P": 128}
-        ],
-        "matmul_f16": [
-          {"matrix_M": 256, "matrix_N": 256, "matrix_P": 256},
-          {"matrix_M": 256, "matrix_N": 128, "matrix_P": 256},
-          {"matrix_M": 128, "matrix_N": 128, "matrix_P": 128}
-        ],
-        "mimo_mmse_f32": [
-          {"N_TX": 8, "N_RX": 16, "N_ITR": 1024}
-        ],
-        "mimo_mmse_f16": [
-          {"N_TX": 8, "N_RX": 32, "N_ITR": 1024}
-        ],
-        "softmax_f16": [
-          {"matrix_M": 2048, "matrix_N": 384}
+          {"matrix_M": 512, "matrix_N": 256, "matrix_P": 512}
         ]
       }
     }

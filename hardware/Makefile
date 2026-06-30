@@ -297,7 +297,7 @@ $(buildpath)/$(library):
 # FlooGen Update
 .PHONY: update-floogen
 update-floogen:
-	$(MAKE) -C .. FLOO_CFG=./config/floo_noc_$(config).yml update-floonoc config=$(config)
+# 	$(MAKE) -C .. FLOO_CFG=./config/floo_noc_$(config).yml update-floonoc config=$(config)
 
 # Compilation
 .PHONY: gen_selector
