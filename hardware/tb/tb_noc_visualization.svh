@@ -1,3 +1,7 @@
+// Copyright 2025 ETH Zurich and University of Bologna.
+// Solderpad Hardware License, Version 0.51, see LICENSE for details.
+// SPDX-License-Identifier: SHL-0.51
+
 // ============================================================================
 // v4m_tracer_allin.svh - Vis4Mesh CSV tracer (ALL-IN-ONE, header-only)
 // Include this *inside* your testbench module.
@@ -73,6 +77,40 @@ localparam int TAPS_PER_GROUP        = NumRouterPerGroup * PORTS_PER_ROUTER;
 localparam int GROUPS                = W * H;
 localparam int N_TAPS                = GROUPS * TAPS_PER_GROUP;
 
+function automatic int unsigned v4m_edge_dst_id(input int unsigned x, input int unsigned y,
+                                                 input int unsigned port);
+  int unsigned dst_x;
+  int unsigned dst_y;
+  begin
+    dst_x = x;
+    dst_y = y;
+    case (port)
+      0: begin // North
+        if (NocTopology == 1) dst_y = (y + 1) % H;
+        else if (y + 1 < H)  dst_y = y + 1;
+        else                 return GROUPS;
+      end
+      1: begin // East
+        if (NocTopology == 1) dst_x = (x + 1) % W;
+        else if (x + 1 < W)  dst_x = x + 1;
+        else                 return GROUPS;
+      end
+      2: begin // South
+        if (NocTopology == 1) dst_y = (y == 0) ? H - 1 : y - 1;
+        else if (y > 0)      dst_y = y - 1;
+        else                 return GROUPS;
+      end
+      3: begin // West
+        if (NocTopology == 1) dst_x = (x == 0) ? W - 1 : x - 1;
+        else if (x > 0)      dst_x = x - 1;
+        else                 return GROUPS;
+      end
+      default: return GROUPS;
+    endcase
+    return dst_y * W + dst_x;
+  end
+endfunction
+
 // ---------- Tap arrays (written below by the data-collection block) ----------
 logic                  tap_valid   [N_TAPS];
 logic            [1:0] tap_msg_idx [N_TAPS];    // 0..3
@@ -90,9 +128,9 @@ int unsigned           tap_dst_id  [N_TAPS];    // packet NI dst (group id)
 //   - change the base path below, or
 //   - `define V4M_BASE` to your path (e.g. `"tb_top.dut"`) and replace uses.
 //
-// Port-direction mapping kept exactly as in your snippet:
+// Port-direction mapping:
 //   0:N(y+1), 1:E(x+1), 2:S(y-1), 3:W(x-1)
-// Invalid neighbors are later skipped by a bounds guard in the writer.
+// Mesh border neighbors are skipped; torus border neighbors wrap.
 // ============================================================================
 genvar group_x, group_y;
 genvar router_id, router_port_id;
@@ -114,38 +152,40 @@ generate
               tap_channel [link_id] <= router_id;       // channel index policy is yours
 
               edge_src_id [link_id] <= base_id;
-              edge_dst_id [link_id] <= (router_port_id == 0) ? ((group_y + 1) * W + group_x) :
-                                      (router_port_id == 1) ? (group_y * W + (group_x + 1)) :
-                                      (router_port_id == 2) ? ((group_y - 1) * W + group_x) :
-                                      (router_port_id == 3) ? (group_y * W + (group_x - 1)) :
-                                                              base_id;
+              edge_dst_id [link_id] <= v4m_edge_dst_id(group_x, group_y, router_port_id);
 
               tap_src_id  [link_id] <= dut.i_mempool_cluster.gen_groups_x[group_x].gen_groups_y[group_y].gen_rtl_group.i_group
-                                      .gen_router_router_i[router_id/NumNarrowRemoteReqPortsPerTile]
-                                      .gen_router_narrow_req_router_j[router_id%NumNarrowRemoteReqPortsPerTile]
-                                      .gen_2dmesh.i_floo_tcdm_narrow_req_router.data_o[router_port_id][0].hdr.src_id.y * W
+                                      .floo_tcdm_narrow_req_out_trans
+                                        [router_id/NumNarrowRemoteReqPortsPerTile]
+                                        [router_id%NumNarrowRemoteReqPortsPerTile]
+                                        [router_port_id].hdr.src_id.y * W
                                     + dut.i_mempool_cluster.gen_groups_x[group_x].gen_groups_y[group_y].gen_rtl_group.i_group
-                                      .gen_router_router_i[router_id/NumNarrowRemoteReqPortsPerTile]
-                                      .gen_router_narrow_req_router_j[router_id%NumNarrowRemoteReqPortsPerTile]
-                                      .gen_2dmesh.i_floo_tcdm_narrow_req_router.data_o[router_port_id][0].hdr.src_id.x;
+                                      .floo_tcdm_narrow_req_out_trans
+                                        [router_id/NumNarrowRemoteReqPortsPerTile]
+                                        [router_id%NumNarrowRemoteReqPortsPerTile]
+                                        [router_port_id].hdr.src_id.x;
 
               tap_dst_id  [link_id] <= dut.i_mempool_cluster.gen_groups_x[group_x].gen_groups_y[group_y].gen_rtl_group.i_group
-                                      .gen_router_router_i[router_id/NumNarrowRemoteReqPortsPerTile]
-                                      .gen_router_narrow_req_router_j[router_id%NumNarrowRemoteReqPortsPerTile]
-                                      .gen_2dmesh.i_floo_tcdm_narrow_req_router.data_o[router_port_id][0].hdr.dst_id.y * W
+                                      .floo_tcdm_narrow_req_out_trans
+                                        [router_id/NumNarrowRemoteReqPortsPerTile]
+                                        [router_id%NumNarrowRemoteReqPortsPerTile]
+                                        [router_port_id].hdr.dst_id.y * W
                                     + dut.i_mempool_cluster.gen_groups_x[group_x].gen_groups_y[group_y].gen_rtl_group.i_group
-                                      .gen_router_router_i[router_id/NumNarrowRemoteReqPortsPerTile]
-                                      .gen_router_narrow_req_router_j[router_id%NumNarrowRemoteReqPortsPerTile]
-                                      .gen_2dmesh.i_floo_tcdm_narrow_req_router.data_o[router_port_id][0].hdr.dst_id.x;
+                                      .floo_tcdm_narrow_req_out_trans
+                                        [router_id/NumNarrowRemoteReqPortsPerTile]
+                                        [router_id%NumNarrowRemoteReqPortsPerTile]
+                                        [router_port_id].hdr.dst_id.x;
 
               tap_valid   [link_id] <= dut.i_mempool_cluster.gen_groups_x[group_x].gen_groups_y[group_y].gen_rtl_group.i_group
-                                      .gen_router_router_i[router_id/NumNarrowRemoteReqPortsPerTile]
-                                      .gen_router_narrow_req_router_j[router_id%NumNarrowRemoteReqPortsPerTile]
-                                      .gen_2dmesh.i_floo_tcdm_narrow_req_router.valid_o[router_port_id][0]
+                                      .floo_tcdm_narrow_req_valid_out_trans
+                                        [router_id/NumNarrowRemoteReqPortsPerTile]
+                                        [router_id%NumNarrowRemoteReqPortsPerTile]
+                                        [router_port_id]
                                     && dut.i_mempool_cluster.gen_groups_x[group_x].gen_groups_y[group_y].gen_rtl_group.i_group
-                                      .gen_router_router_i[router_id/NumNarrowRemoteReqPortsPerTile]
-                                      .gen_router_narrow_req_router_j[router_id%NumNarrowRemoteReqPortsPerTile]
-                                      .gen_2dmesh.i_floo_tcdm_narrow_req_router.ready_i[router_port_id][0];
+                                      .floo_tcdm_narrow_req_ready_in_trans
+                                        [router_id/NumNarrowRemoteReqPortsPerTile]
+                                        [router_id%NumNarrowRemoteReqPortsPerTile]
+                                        [router_port_id];
             end
           end
         end else if (router_id < (NumNarrowRemoteReqPortsPerTile + NumWideRemoteReqPortsPerTile) * NumTilesPerGroup) begin
@@ -155,47 +195,50 @@ generate
             localparam int link_id = base_id * NumRouterPerGroup * 4 + router_id * 4 + router_port_id;
             always_ff @(posedge `V4M_CLK) begin
               tap_msg_idx [link_id] <= dut.i_mempool_cluster.gen_groups_x[group_x].gen_groups_y[group_y].gen_rtl_group.i_group
-                                      .gen_router_router_i[offset_router_id/NumWideRemoteReqPortsPerTile]
-                                      .gen_router_wide_req_router_j[offset_router_id%NumWideRemoteReqPortsPerTile]
-                                      .gen_2dmesh.i_floo_tcdm_wide_req_router.data_o[router_port_id][0].payload.wen
+                                      .floo_tcdm_wide_req_out_trans
+                                        [offset_router_id/NumWideRemoteReqPortsPerTile]
+                                        [offset_router_id%NumWideRemoteReqPortsPerTile]
+                                        [router_port_id].payload.wen
                                         ? MT_WRITE_REQ : MT_READ_REQ;
 
               tap_tt      [link_id] <= TT_MESH_RELAY;
               tap_channel [link_id] <= router_id;
 
               edge_src_id [link_id] <= base_id;
-              edge_dst_id [link_id] <= (router_port_id == 0) ? ((group_y + 1) * W + group_x) :
-                                      (router_port_id == 1) ? (group_y * W + (group_x + 1)) :
-                                      (router_port_id == 2) ? ((group_y - 1) * W + group_x) :
-                                      (router_port_id == 3) ? (group_y * W + (group_x - 1)) :
-                                                              base_id;
+              edge_dst_id [link_id] <= v4m_edge_dst_id(group_x, group_y, router_port_id);
 
               tap_src_id  [link_id] <= dut.i_mempool_cluster.gen_groups_x[group_x].gen_groups_y[group_y].gen_rtl_group.i_group
-                                      .gen_router_router_i[offset_router_id/NumWideRemoteReqPortsPerTile]
-                                      .gen_router_wide_req_router_j[offset_router_id%NumWideRemoteReqPortsPerTile]
-                                      .gen_2dmesh.i_floo_tcdm_wide_req_router.data_o[router_port_id][0].hdr.src_id.y * W
+                                      .floo_tcdm_wide_req_out_trans
+                                        [offset_router_id/NumWideRemoteReqPortsPerTile]
+                                        [offset_router_id%NumWideRemoteReqPortsPerTile]
+                                        [router_port_id].hdr.src_id.y * W
                                     + dut.i_mempool_cluster.gen_groups_x[group_x].gen_groups_y[group_y].gen_rtl_group.i_group
-                                      .gen_router_router_i[offset_router_id/NumWideRemoteReqPortsPerTile]
-                                      .gen_router_wide_req_router_j[offset_router_id%NumWideRemoteReqPortsPerTile]
-                                      .gen_2dmesh.i_floo_tcdm_wide_req_router.data_o[router_port_id][0].hdr.src_id.x;
+                                      .floo_tcdm_wide_req_out_trans
+                                        [offset_router_id/NumWideRemoteReqPortsPerTile]
+                                        [offset_router_id%NumWideRemoteReqPortsPerTile]
+                                        [router_port_id].hdr.src_id.x;
 
               tap_dst_id  [link_id] <= dut.i_mempool_cluster.gen_groups_x[group_x].gen_groups_y[group_y].gen_rtl_group.i_group
-                                      .gen_router_router_i[offset_router_id/NumWideRemoteReqPortsPerTile]
-                                      .gen_router_wide_req_router_j[offset_router_id%NumWideRemoteReqPortsPerTile]
-                                      .gen_2dmesh.i_floo_tcdm_wide_req_router.data_o[router_port_id][0].hdr.dst_id.y * W
+                                      .floo_tcdm_wide_req_out_trans
+                                        [offset_router_id/NumWideRemoteReqPortsPerTile]
+                                        [offset_router_id%NumWideRemoteReqPortsPerTile]
+                                        [router_port_id].hdr.dst_id.y * W
                                     + dut.i_mempool_cluster.gen_groups_x[group_x].gen_groups_y[group_y].gen_rtl_group.i_group
-                                      .gen_router_router_i[offset_router_id/NumWideRemoteReqPortsPerTile]
-                                      .gen_router_wide_req_router_j[offset_router_id%NumWideRemoteReqPortsPerTile]
-                                      .gen_2dmesh.i_floo_tcdm_wide_req_router.data_o[router_port_id][0].hdr.dst_id.x;
+                                      .floo_tcdm_wide_req_out_trans
+                                        [offset_router_id/NumWideRemoteReqPortsPerTile]
+                                        [offset_router_id%NumWideRemoteReqPortsPerTile]
+                                        [router_port_id].hdr.dst_id.x;
 
               tap_valid   [link_id] <= dut.i_mempool_cluster.gen_groups_x[group_x].gen_groups_y[group_y].gen_rtl_group.i_group
-                                      .gen_router_router_i[offset_router_id/NumWideRemoteReqPortsPerTile]
-                                      .gen_router_wide_req_router_j[offset_router_id%NumWideRemoteReqPortsPerTile]
-                                      .gen_2dmesh.i_floo_tcdm_wide_req_router.valid_o[router_port_id][0]
+                                      .floo_tcdm_wide_req_valid_out_trans
+                                        [offset_router_id/NumWideRemoteReqPortsPerTile]
+                                        [offset_router_id%NumWideRemoteReqPortsPerTile]
+                                        [router_port_id]
                                     && dut.i_mempool_cluster.gen_groups_x[group_x].gen_groups_y[group_y].gen_rtl_group.i_group
-                                      .gen_router_router_i[offset_router_id/NumWideRemoteReqPortsPerTile]
-                                      .gen_router_wide_req_router_j[offset_router_id%NumWideRemoteReqPortsPerTile]
-                                      .gen_2dmesh.i_floo_tcdm_wide_req_router.ready_i[router_port_id][0];
+                                      .floo_tcdm_wide_req_ready_in_trans
+                                        [offset_router_id/NumWideRemoteReqPortsPerTile]
+                                        [offset_router_id%NumWideRemoteReqPortsPerTile]
+                                        [router_port_id];
             end
           end
 
@@ -210,38 +253,40 @@ generate
               tap_channel [link_id] <= router_id;
 
               edge_src_id [link_id] <= base_id;
-              edge_dst_id [link_id] <= (router_port_id == 0) ? ((group_y + 1) * W + group_x) :
-                                      (router_port_id == 1) ? (group_y * W + (group_x + 1)) :
-                                      (router_port_id == 2) ? ((group_y - 1) * W + group_x) :
-                                      (router_port_id == 3) ? (group_y * W + (group_x - 1)) :
-                                                              base_id;
+              edge_dst_id [link_id] <= v4m_edge_dst_id(group_x, group_y, router_port_id);
 
               tap_src_id  [link_id] <= dut.i_mempool_cluster.gen_groups_x[group_x].gen_groups_y[group_y].gen_rtl_group.i_group
-                                      .gen_router_router_i[offset_router_id/NumWideRemoteRespPortsPerTile]
-                                      .gen_router_wide_resp_router_j[offset_router_id%NumWideRemoteRespPortsPerTile+1]
-                                      .gen_2dmesh.i_floo_tcdm_wide_resp_router.data_o[router_port_id][0].hdr.src_id.y * W
+                                      .floo_tcdm_resp_out_trans
+                                        [offset_router_id/NumWideRemoteRespPortsPerTile]
+                                        [offset_router_id%NumWideRemoteRespPortsPerTile+1]
+                                        [router_port_id].hdr.src_id.y * W
                                     + dut.i_mempool_cluster.gen_groups_x[group_x].gen_groups_y[group_y].gen_rtl_group.i_group
-                                      .gen_router_router_i[offset_router_id/NumWideRemoteRespPortsPerTile]
-                                      .gen_router_wide_resp_router_j[offset_router_id%NumWideRemoteRespPortsPerTile+1]
-                                      .gen_2dmesh.i_floo_tcdm_wide_resp_router.data_o[router_port_id][0].hdr.src_id.x;
+                                      .floo_tcdm_resp_out_trans
+                                        [offset_router_id/NumWideRemoteRespPortsPerTile]
+                                        [offset_router_id%NumWideRemoteRespPortsPerTile+1]
+                                        [router_port_id].hdr.src_id.x;
 
               tap_dst_id  [link_id] <= dut.i_mempool_cluster.gen_groups_x[group_x].gen_groups_y[group_y].gen_rtl_group.i_group
-                                      .gen_router_router_i[offset_router_id/NumWideRemoteRespPortsPerTile]
-                                      .gen_router_wide_resp_router_j[offset_router_id%NumWideRemoteRespPortsPerTile+1]
-                                      .gen_2dmesh.i_floo_tcdm_wide_resp_router.data_o[router_port_id][0].hdr.dst_id.y * W
+                                      .floo_tcdm_resp_out_trans
+                                        [offset_router_id/NumWideRemoteRespPortsPerTile]
+                                        [offset_router_id%NumWideRemoteRespPortsPerTile+1]
+                                        [router_port_id].hdr.dst_id.y * W
                                     + dut.i_mempool_cluster.gen_groups_x[group_x].gen_groups_y[group_y].gen_rtl_group.i_group
-                                      .gen_router_router_i[offset_router_id/NumWideRemoteRespPortsPerTile]
-                                      .gen_router_wide_resp_router_j[offset_router_id%NumWideRemoteRespPortsPerTile+1]
-                                      .gen_2dmesh.i_floo_tcdm_wide_resp_router.data_o[router_port_id][0].hdr.dst_id.x;
+                                      .floo_tcdm_resp_out_trans
+                                        [offset_router_id/NumWideRemoteRespPortsPerTile]
+                                        [offset_router_id%NumWideRemoteRespPortsPerTile+1]
+                                        [router_port_id].hdr.dst_id.x;
 
               tap_valid   [link_id] <= dut.i_mempool_cluster.gen_groups_x[group_x].gen_groups_y[group_y].gen_rtl_group.i_group
-                                      .gen_router_router_i[offset_router_id/NumWideRemoteRespPortsPerTile]
-                                      .gen_router_wide_resp_router_j[offset_router_id%NumWideRemoteRespPortsPerTile+1]
-                                      .gen_2dmesh.i_floo_tcdm_wide_resp_router.valid_o[router_port_id][0]
+                                      .floo_tcdm_resp_valid_out_trans
+                                        [offset_router_id/NumWideRemoteRespPortsPerTile]
+                                        [offset_router_id%NumWideRemoteRespPortsPerTile+1]
+                                        [router_port_id]
                                     && dut.i_mempool_cluster.gen_groups_x[group_x].gen_groups_y[group_y].gen_rtl_group.i_group
-                                      .gen_router_router_i[offset_router_id/NumWideRemoteRespPortsPerTile]
-                                      .gen_router_wide_resp_router_j[offset_router_id%NumWideRemoteRespPortsPerTile+1]
-                                      .gen_2dmesh.i_floo_tcdm_wide_resp_router.ready_i[router_port_id][0];
+                                      .floo_tcdm_resp_ready_in_trans
+                                        [offset_router_id/NumWideRemoteRespPortsPerTile]
+                                        [offset_router_id%NumWideRemoteRespPortsPerTile+1]
+                                        [router_port_id];
             end
           end
         end
