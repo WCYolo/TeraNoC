@@ -109,8 +109,8 @@ if __name__ == "__main__":
     rule_struct += "\n"
     rule_struct += "typedef struct packed {\n"
     rule_struct += "  logic [2:0]  idx;\n"
-    rule_struct += f"  routing_rule_addr_t  start_addr;\n"
-    rule_struct += f"  routing_rule_addr_t  end_addr;\n"
+    rule_struct += "  routing_rule_addr_t  start_addr;\n"
+    rule_struct += "  routing_rule_addr_t  end_addr;\n"
     rule_struct += "} routing_rule_t;\n"
     rule_struct += "\n"
 
@@ -129,8 +129,10 @@ if __name__ == "__main__":
                     addr_end = addr_start + 1
                     package += "\n      {"
                     package += f" {routing_table[src][dst].name},"
-                    package += f" {addr_width}'d{(addr_start % (max_addr + 1)) << 1},"
-                    package += f" {addr_width}'d{(addr_end % (max_addr + 1)) << 1}"
+                    start = (addr_start % (max_addr + 1)) << 1
+                    end = (addr_end % (max_addr + 1)) << 1
+                    package += f" {addr_width}'d{start},"
+                    package += f" {addr_width}'d{end}"
                     package += " },"
             package = package.rstrip(",")
             package += "\n    },"

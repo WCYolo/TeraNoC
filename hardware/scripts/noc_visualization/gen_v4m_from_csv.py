@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-import argparse, csv, json, math, os
+import argparse
+import csv
+import json
+import math
+import os
 from collections import defaultdict
 
 # ---------------- Fixed enums (your 4 msg types & 4 transfer types) ----------
@@ -27,7 +31,7 @@ NUM_TRANSFERS = 4
 NUM_MSG_TYPES = 4
 
 
-# ---------------- Helpers -----------------------------------------------------
+# ---------------- Helpers ----------------------------------------------------
 def dump_json(path, obj, indent=None):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w") as f:
@@ -77,8 +81,8 @@ def chan_labels_from_set(chs):
 
 
 def build_channel_groups_and_labels(num_channels, tiles_per_group,
-                                     narrow_req_ch, wide_req_ch, resp_ch):
-    """Build descriptive channel labels and group definitions from the NoC config.
+                                    narrow_req_ch, wide_req_ch, resp_ch):
+    """Build channel labels and group definitions from the NoC config.
 
     The RTL tracer assigns router_id as the channel. Routers are ordered:
       [0, narrow_end):           Narrow Req routers
@@ -148,7 +152,10 @@ def parse_trace_csv(path, needed, strict=False):
             try:
                 rows.append(tuple(int(r[k]) for k in needed))
             except ValueError as e:
-                msg = f"line {cr.line_num}: invalid integer ({e}) in row {dict(r)}"
+                msg = (
+                    f"line {cr.line_num}: invalid integer ({e}) "
+                    f"in row {dict(r)}"
+                )
                 if strict:
                     raise RuntimeError(msg)
                 skipped.append(msg)
@@ -173,7 +180,7 @@ def offset(tt, hop_bin, mt, ch, num_hop_units, num_channels):
     )
 
 
-# ---------------- Core builder ------------------------------------------------
+# ---------------- Core builder -----------------------------------------------
 def build_dataset(
     rows,
     outdir,
@@ -275,7 +282,7 @@ def build_dataset(
         flat_counts[s][(mt, tt)] += fl
         per_slice_edge_sum[s][key] += fl
 
-    # Write a baseline "-1.json" with all-zero edge values (prefix-sum baseline)
+    # Write a baseline "-1.json" with all-zero edge values.
     zeros_out = [
         {
             "source": str(u),
@@ -397,15 +404,17 @@ def build_dataset(
 
     print(f"✔ wrote {outdir}  (slices: {min_slice}..{max_slice}, edges={E})")
     print(
-        f"  edge_prefix_sum (prefix): wrote={written_slices}, skipped_empty={skipped_empty}"
+        "  edge_prefix_sum (prefix): "
+        f"wrote={written_slices}, skipped_empty={skipped_empty}"
     )
     if out_of_bounds or non_neighbor:
         print(
-            f"  skipped rows: out_of_bounds={out_of_bounds}, non_neighbor={non_neighbor}"
+            "  skipped rows: "
+            f"out_of_bounds={out_of_bounds}, non_neighbor={non_neighbor}"
         )
 
 
-# ---------------- CLI ---------------------------------------------------------
+# ---------------- CLI --------------------------------------------------------
 def main():
     ap = argparse.ArgumentParser(
         description=(
@@ -415,7 +424,10 @@ def main():
     )
     ap.add_argument(
         "csv",
-        help="source CSV: slice,edge_src,edge_dst,tt,mt,ch,flits,pkt_src,pkt_dst",
+        help=(
+            "source CSV: "
+            "slice,edge_src,edge_dst,tt,mt,ch,flits,pkt_src,pkt_dst"
+        ),
     )
     ap.add_argument("outdir", help="output folder")
     ap.add_argument("--W", type=int, required=True)
@@ -437,7 +449,10 @@ def main():
         "--channel-map",
         choices=["auto", "identity"],
         default="auto",
-        help="auto: remap sparse channel ids to 0..C-1; identity: require dense 0..C-1",
+        help=(
+            "auto: remap sparse channel ids to 0..C-1; "
+            "identity: require dense 0..C-1"
+        ),
     )
     ap.add_argument(
         "--pretty",
@@ -463,12 +478,18 @@ def main():
         "--cycles-per-slice",
         type=int,
         default=10,
-        help="Cycles per slice, set 'slice' field in meta.json to this value (default: 10)",
+        help=(
+            "Cycles per slice, set 'slice' field in meta.json "
+            "to this value (default: 10)"
+        ),
     )
     ap.add_argument(
         "--strict-csv",
         action="store_true",
-        help="Fail on malformed CSV rows instead of skipping them with a warning",
+        help=(
+            "Fail on malformed CSV rows instead of skipping them "
+            "with a warning"
+        ),
     )
     # TeraNoC-specific: auto-generate channel groups from NoC config
     ap.add_argument(
@@ -527,7 +548,8 @@ def main():
             num_channels = (max(ch_set) + 1) if ch_set else 1
             if ch_set != set(range(num_channels)):
                 raise RuntimeError(
-                    f"channel ids not dense 0..{num_channels-1}: {sorted(ch_set)}"
+                    "channel ids not dense "
+                    f"0..{num_channels - 1}: {sorted(ch_set)}"
                 )
             labels = [f"ch{i}" for i in range(num_channels)]
             rows = rows_raw
@@ -563,7 +585,10 @@ def main():
             args.narrow_req_ch, args.wide_req_ch, args.resp_ch,
         )
         if args.debug:
-            grp_summary = [g['name'] + '(' + str(len(g['channels'])) + ')' for g in channel_groups]
+            grp_summary = [
+                g["name"] + "(" + str(len(g["channels"])) + ")"
+                for g in channel_groups
+            ]
             print(f"  channel_groups: {grp_summary}")
 
     build_dataset(

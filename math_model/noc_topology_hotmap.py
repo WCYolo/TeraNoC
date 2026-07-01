@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 
-import os
-os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
-
 import argparse
-from pathlib import Path
 import enum
+import os
+from pathlib import Path
 
 import numpy as np
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 
-from matplotlib import colormaps, colors
-from matplotlib.lines import Line2D
+
+os.environ.setdefault("MPLCONFIGDIR", "/tmp/matplotlib")
+
+import matplotlib  # noqa: E402
+matplotlib.use("Agg")
+
+import matplotlib.pyplot as plt  # noqa: E402
+from matplotlib import colormaps, colors  # noqa: E402
+from matplotlib.lines import Line2D  # noqa: E402
 
 
 # ============================================================
@@ -284,7 +286,8 @@ def torus_route_path(src, dst, n):
         state = (cur, dst)
         if state in visited:
             raise RuntimeError(
-                f"Torus routing loop detected: src={src}, dst={dst}, cur={cur}, path={path}"
+                "Torus routing loop detected: "
+                f"src={src}, dst={dst}, cur={cur}, path={path}"
             )
         visited.add(state)
 
@@ -301,7 +304,8 @@ def torus_route_path(src, dst, n):
 
     if cur != dst:
         raise RuntimeError(
-            f"Torus route did not reach destination: src={src}, dst={dst}, cur={cur}, path={path}"
+            "Torus route did not reach destination: "
+            f"src={src}, dst={dst}, cur={cur}, path={path}"
         )
 
     return path
@@ -349,7 +353,8 @@ def map_torus_traffic(n):
                     elif abs(ux - vx) == n - 1:
                         hw_load[uy] += 1
                     else:
-                        raise RuntimeError(f"Illegal horizontal torus edge: {u}->{v}")
+                        raise RuntimeError(
+                            f"Illegal horizontal torus edge: {u}->{v}")
                 elif ux == vx:
                     # Vertical local or wrap link
                     if abs(uy - vy) == 1:
@@ -357,11 +362,103 @@ def map_torus_traffic(n):
                     elif abs(uy - vy) == n - 1:
                         vw_load[ux] += 1
                     else:
-                        raise RuntimeError(f"Illegal vertical torus edge: {u}->{v}")
+                        raise RuntimeError(
+                            f"Illegal vertical torus edge: {u}->{v}")
                 else:
-                    raise RuntimeError(f"Illegal diagonal torus edge: {u}->{v}")
+                    raise RuntimeError(
+                        f"Illegal diagonal torus edge: {u}->{v}")
 
     return h1_load, v1_load, hw_load, vw_load, total_flows, total_hops
+
+
+# ============================================================
+# Y-direction half-torus routing model
+# ============================================================
+
+def map_y_half_torus_traffic(n):
+    """
+    Y-direction half-torus traffic mapping.
+
+    Topology:
+        X direction: normal mesh only, no horizontal wrap-around.
+        Y direction: torus-style vertical wrap-around.
+
+    Routing rule:
+        1. X phase: ordinary mesh routing, no modulo wrap.
+        2. Y phase: torus shortest-path routing with the same Y-direction
+           tie-breaking rule as full torus.
+
+    Returned arrays:
+        h1_load[y,x] = local horizontal link (x,y) <-> (x+1,y)
+        v1_load[y,x] = local vertical link   (x,y) <-> (x,y+1)
+        vw_load[x]   = vertical wrap link    (x,0) <-> (x,n-1)
+
+    All counts are physical-link counts:
+        count(u<->v) = count(u->v) + count(v->u)
+    """
+    h1_load = np.zeros((n, n - 1), dtype=int)
+    v1_load = np.zeros((n - 1, n), dtype=int)
+    vw_load = np.zeros(n, dtype=int)
+
+    nodes = all_nodes(n)
+    total_flows = 0
+    total_hops = 0
+
+    for src in nodes:
+        for dst in nodes:
+            if src == dst:
+                continue
+
+            sx, sy = src
+            dx, dy = dst
+
+            total_flows += 1
+
+            # X phase: mesh-style local links only.
+            # This is deliberately NOT torus routing because the Y-half-torus
+            # topology has no horizontal wrap-around links.
+            cur_x = sx
+            while cur_x != dx:
+                if dx > cur_x:
+                    nxt_x = cur_x + 1
+                else:
+                    nxt_x = cur_x - 1
+
+                h1_load[sy, min(cur_x, nxt_x)] += 1
+                total_hops += 1
+                cur_x = nxt_x
+
+            # Y phase: torus-style shortest path with the same deterministic
+            # tie-breaking as full torus.
+            cur_y = sy
+            while cur_y != dy:
+                north_dist = (dy - cur_y) % n
+                south_dist = (cur_y - dy) % n
+
+                if north_dist < south_dist:
+                    nxt_y = (cur_y + 1) % n
+                elif south_dist < north_dist:
+                    nxt_y = (cur_y - 1) % n
+                elif cur_y % 2 == 0:
+                    nxt_y = (cur_y + 1) % n
+                else:
+                    nxt_y = (cur_y - 1) % n
+
+                # Local vertical link or vertical wrap-around link.
+                if abs(cur_y - nxt_y) == 1:
+                    v1_load[min(cur_y, nxt_y), dx] += 1
+                elif abs(cur_y - nxt_y) == n - 1:
+                    vw_load[dx] += 1
+                else:
+                    raise RuntimeError(
+                        "Illegal Y-half-torus vertical edge: "
+                        f"({dx},{cur_y})->({dx},{nxt_y})"
+                    )
+
+                total_hops += 1
+                cur_y = nxt_y
+
+    return h1_load, v1_load, vw_load, total_flows, total_hops
 
 
 # ============================================================
@@ -375,6 +472,10 @@ def max_load_for_topology_result(topology, result):
     if topology == "full_torus":
         h1, v1, hw, vw, _flows, _hops = result
         arrays = [h1, v1, hw, vw]
+        return max(int(a.max()) if a.size else 0 for a in arrays)
+    if topology == "y_half_torus":
+        h1, v1, vw, _flows, _hops = result
+        arrays = [h1, v1, vw]
         return max(int(a.max()) if a.size else 0 for a in arrays)
     raise ValueError(f"Unknown topology for max-load calculation: {topology}")
 
@@ -555,8 +656,10 @@ def plot_y_ruche_2hop(n, h1_load, v1_load, v2_load, outdir):
     add_colorbar(fig, ax, cmap, norm)
 
     legend_elements = [
-        Line2D([0], [0], color="black", lw=3.2, label="Solid = local 1-hop mesh link"),
-        Line2D([0], [0], color="black", lw=2.8, linestyle=dash_style, label="Dashed = 2-hop Y express link"),
+        Line2D([0], [0], color="black", lw=3.2,
+               label="Solid = local 1-hop mesh link"),
+        Line2D([0], [0], color="black", lw=2.8, linestyle=dash_style,
+               label="Dashed = 2-hop Y express link"),
         Line2D(
             [0], [0],
             color="navy",
@@ -584,8 +687,10 @@ def plot_y_ruche_2hop(n, h1_load, v1_load, v2_load, outdir):
     )
     setup_axes(ax, n)
 
-    png = outdir / f"{n}x{n}_y_direction_2hop_half_ruche_hotmap_global_scale.png"
-    svg = outdir / f"{n}x{n}_y_direction_2hop_half_ruche_hotmap_global_scale.svg"
+    png = outdir / \
+        f"{n}x{n}_y_direction_2hop_half_ruche_hotmap_global_scale.png"
+    svg = outdir / \
+        f"{n}x{n}_y_direction_2hop_half_ruche_hotmap_global_scale.svg"
     fig.savefig(png, bbox_inches="tight", facecolor="white")
     fig.savefig(svg, bbox_inches="tight", facecolor="white")
     plt.close(fig)
@@ -683,8 +788,10 @@ def plot_full_ruche_2hop(n, h1_load, h2_load, v1_load, v2_load, outdir):
     add_colorbar(fig, ax, cmap, norm)
 
     legend_elements = [
-        Line2D([0], [0], color="black", lw=3.2, label="Solid = local 1-hop mesh link"),
-        Line2D([0], [0], color="black", lw=2.8, linestyle=dash_style, label="Dashed = 2-hop express link"),
+        Line2D([0], [0], color="black", lw=3.2,
+               label="Solid = local 1-hop mesh link"),
+        Line2D([0], [0], color="black", lw=2.8, linestyle=dash_style,
+               label="Dashed = 2-hop express link"),
         Line2D(
             [0], [0],
             color="navy",
@@ -722,10 +829,130 @@ def plot_full_ruche_2hop(n, h1_load, h2_load, v1_load, v2_load, outdir):
 
 
 # ============================================================
+# Plot: Y-direction half-torus
+# ============================================================
+
+def plot_y_half_torus(
+    n, h1_load, v1_load, vw_load, total_flows, total_hops, outdir
+):
+    """
+    Plot Y-direction half-torus:
+      - solid = local 1-hop mesh link
+      - dashed = vertical torus wrap-around link
+      - blue boxed number = vertical wrap-link mapped count
+
+    This function intentionally reuses your current visual parameters:
+      - colormap from make_norm()
+      - dashed style: (0, (4, 2.3))
+      - wrap offset: 0.15
+      - end_gap: 0.08
+    """
+    cmap, norm = make_norm()
+    fig, ax = plt.subplots(figsize=(9.0, 9.0), dpi=180)
+
+    dash_style = (0, (4, 2.3))
+    end_gap = 0.08
+
+    # Local links reuse the same mesh visual base.
+    draw_local_links(ax, n, h1_load, v1_load, cmap, norm)
+
+    # Vertical wrap links:
+    # VW[x] = (x,0) <-> (x,n-1)
+    for x in range(n):
+        val = int(vw_load[x])
+
+        if x < n / 2:
+            x_out = x - 0.15
+        else:
+            x_out = x + 0.15
+
+        ax.plot(
+            [x, x_out],
+            [0, 0],
+            color=cmap(norm(val)),
+            linewidth=2.8,
+            linestyle=dash_style,
+            zorder=0,
+        )
+        ax.plot(
+            [x_out, x_out],
+            [-0 - end_gap, -(n - 1) + end_gap],
+            color=cmap(norm(val)),
+            linewidth=2.8,
+            linestyle=dash_style,
+            zorder=0,
+        )
+        ax.plot(
+            [x, x_out],
+            [-(n - 1), -(n - 1)],
+            color=cmap(norm(val)),
+            linewidth=2.8,
+            linestyle=dash_style,
+            zorder=0,
+        )
+
+        label_box(
+            ax,
+            x_out,
+            -(n - 1) / 2,
+            val,
+            color="navy",
+            edgecolor="navy",
+            fontsize=10,
+        )
+
+    draw_nodes(ax, n)
+    add_colorbar(fig, ax, cmap, norm)
+
+    legend_elements = [
+        Line2D([0], [0], color="black", lw=3.2,
+               label="Solid = local 1-hop mesh link"),
+        Line2D([0], [0], color="black", lw=2.8, linestyle=dash_style,
+               label="Dashed = Y-direction wrap-around link"),
+        Line2D(
+            [0], [0],
+            color="navy",
+            lw=0,
+            marker="s",
+            markersize=8,
+            markerfacecolor="white",
+            markeredgecolor="navy",
+            label="Blue number = wrap-link mapped count",
+        ),
+    ]
+
+    ax.legend(
+        handles=legend_elements,
+        loc="upper center",
+        bbox_to_anchor=(0.5, -0.08),
+        frameon=False,
+        ncol=1,
+        fontsize=9,
+    )
+
+    ax.set_title(
+        f"{n}x{n} Y-Direction Half-Torus: NoC-Channel Traffic Hot Map\n"
+        f"Global color scale: {GLOBAL_VMIN}-{GLOBAL_VMAX}, "
+        f"avg. hop = {total_hops / total_flows:.3f}"
+    )
+    setup_axes(ax, n)
+
+    png = outdir / f"{n}x{n}_y_direction_half_torus_hotmap_global_scale.png"
+    svg = outdir / f"{n}x{n}_y_direction_half_torus_hotmap_global_scale.svg"
+    fig.savefig(png, bbox_inches="tight", facecolor="white")
+    fig.savefig(svg, bbox_inches="tight", facecolor="white")
+    plt.close(fig)
+
+    return [png, svg]
+
+
+# ============================================================
 # Plot: full torus
 # ============================================================
 
-def plot_full_torus(n, h1_load, v1_load, hw_load, vw_load, total_flows, total_hops, outdir):
+def plot_full_torus(
+    n, h1_load, v1_load, hw_load, vw_load, total_flows, total_hops, outdir
+):
     """
     Plot full-torus with the same visual grammar:
       - solid = local 1-hop mesh link
@@ -747,7 +974,7 @@ def plot_full_torus(n, h1_load, v1_load, hw_load, vw_load, total_flows, total_ho
         val = int(hw_load[y])
 
         # Display y coordinate is -y.
-        # Rows in the upper half are drawn above; lower half rows are drawn below.
+        # Upper-half rows are drawn above; lower-half rows below.
         if y < n / 2:
             y_out = -y + 0.15
         else:
@@ -837,8 +1064,10 @@ def plot_full_torus(n, h1_load, v1_load, hw_load, vw_load, total_flows, total_ho
     add_colorbar(fig, ax, cmap, norm)
 
     legend_elements = [
-        Line2D([0], [0], color="black", lw=3.2, label="Solid = local 1-hop mesh link"),
-        Line2D([0], [0], color="black", lw=2.8, linestyle=dash_style, label="Dashed = torus wrap-around link"),
+        Line2D([0], [0], color="black", lw=3.2,
+               label="Solid = local 1-hop mesh link"),
+        Line2D([0], [0], color="black", lw=2.8, linestyle=dash_style,
+               label="Dashed = torus wrap-around link"),
         Line2D(
             [0], [0],
             color="navy",
@@ -889,12 +1118,20 @@ def selected_topologies_from_arg(topology_arg):
         return ["full_ruche_2hop"]
     if topology_arg == "full_torus":
         return ["full_torus"]
+    if topology_arg == "y_half_torus":
+        return ["y_half_torus"]
     if topology_arg == "both":
         return ["mesh", "y_ruche_2hop"]
     if topology_arg == "all_no_torus":
         return ["mesh", "y_ruche_2hop", "full_ruche_2hop"]
     if topology_arg == "all":
-        return ["mesh", "y_ruche_2hop", "full_ruche_2hop", "full_torus"]
+        return [
+            "mesh",
+            "y_ruche_2hop",
+            "full_ruche_2hop",
+            "y_half_torus",
+            "full_torus",
+        ]
     raise ValueError(f"Unknown topology argument: {topology_arg}")
 
 
@@ -917,6 +1154,7 @@ def main():
             "y_ruche_2hop",
             "full_ruche_2hop",
             "full_torus",
+            "y_half_torus",
             "both",
             "all_no_torus",
             "all",
@@ -926,7 +1164,8 @@ def main():
             "Topology to plot. "
             "'both' means mesh + y_ruche_2hop. "
             "'all_no_torus' means mesh + y_ruche_2hop + full_ruche_2hop. "
-            "'all' means mesh + y_ruche_2hop + full_ruche_2hop + full_torus."
+            "'all' means mesh + y_ruche_2hop + full_ruche_2hop + "
+            "y_half_torus + full_torus."
         ),
     )
 
@@ -956,7 +1195,14 @@ def main():
 
     if n < 2:
         raise ValueError("N must be >= 2.")
-    if n < 3 and args.topology in ["y_ruche_2hop", "full_ruche_2hop", "all", "both", "all_no_torus"]:
+    ruche_topologies = [
+        "y_ruche_2hop",
+        "full_ruche_2hop",
+        "all",
+        "both",
+        "all_no_torus",
+    ]
+    if n < 3 and args.topology in ruche_topologies:
         raise ValueError("2-hop ruche requires N >= 3.")
 
     selected = selected_topologies_from_arg(args.topology)
@@ -970,12 +1216,15 @@ def main():
             results[topo] = map_mesh_ruche_traffic(n, topo)
         elif topo == "full_torus":
             results[topo] = map_torus_traffic(n)
+        elif topo == "y_half_torus":
+            results[topo] = map_y_half_torus_traffic(n)
         else:
             raise ValueError(f"Unknown selected topology: {topo}")
 
     # Decide global color scale after all selected topologies are known.
     if args.global_vmax.lower() == "auto":
-        GLOBAL_VMAX = max(max_load_for_topology_result(topo, res) for topo, res in results.items())
+        GLOBAL_VMAX = max(max_load_for_topology_result(topo, res)
+                          for topo, res in results.items())
     else:
         GLOBAL_VMAX = int(args.global_vmax)
 
@@ -1026,10 +1275,34 @@ def main():
 
         outputs += plot_full_ruche_2hop(n, h1, h2, v1, v2, outdir)
 
+    if "y_half_torus" in selected:
+        h1, v1, vw, total_flows, total_hops = results["y_half_torus"]
+
+        print(
+            "\n=== Y-direction half torus, "
+            "X-mesh + Y-shortest-torus routing ==="
+        )
+        print("H1 local horizontal mesh links H1[y,x]:")
+        print(h1)
+        print("V1 local vertical mesh links V1[y,x]:")
+        print(v1)
+        print("VW vertical wrap links VW[x]:")
+        print("VW[x] = wrap link (x,0) <-> (x,N-1)")
+        print(vw)
+        print(f"Active ordered flows: {total_flows}")
+        print(f"Total routed hops: {total_hops}")
+        print(f"Average hop count: {total_hops / total_flows:.6f}")
+
+        outputs += plot_y_half_torus(n, h1, v1, vw,
+                                     total_flows, total_hops, outdir)
+
     if "full_torus" in selected:
         h1, v1, hw, vw, total_flows, total_hops = results["full_torus"]
 
-        print("\n=== Full torus, routing-table-style X-first shortest torus routing ===")
+        print(
+            "\n=== Full torus, routing-table-style "
+            "X-first shortest torus routing ==="
+        )
         print("H1 local horizontal mesh links H1[y,x]:")
         print(h1)
         print("V1 local vertical mesh links V1[y,x]:")
@@ -1044,9 +1317,13 @@ def main():
         print(f"Total routed hops: {total_hops}")
         print(f"Average hop count: {total_hops / total_flows:.6f}")
 
-        outputs += plot_full_torus(n, h1, v1, hw, vw, total_flows, total_hops, outdir)
+        outputs += plot_full_torus(n, h1, v1, hw, vw,
+                                   total_flows, total_hops, outdir)
 
-    print(f"\nGlobal color scale shared by selected topologies: {GLOBAL_VMIN}-{GLOBAL_VMAX}")
+    print(
+        "\nGlobal color scale shared by selected topologies: "
+        f"{GLOBAL_VMIN}-{GLOBAL_VMAX}"
+    )
 
     print("\nGenerated files:")
     for path in outputs:
