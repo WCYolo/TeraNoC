@@ -101,6 +101,10 @@ module terapool_cluster_floonoc_wrapper
   floo_tcdm_req_if_t [NumX-1:0][NumY-1:0][West:North] floo_tcdm_req_out, floo_tcdm_req_in;
   floo_tcdm_rsp_if_t [NumX-1:0][NumY-1:0][West:North] floo_tcdm_rsp_out, floo_tcdm_rsp_in;
 
+  // X-axis TCDM NoC feedthrough interfaces
+  floo_tcdm_req_if_t [NumX-1:0][NumY-1:0][NumTcdmFtDirections-1:0] ft_tcdm_req_in, ft_tcdm_req_out;
+  floo_tcdm_rsp_if_t [NumX-1:0][NumY-1:0][NumTcdmFtDirections-1:0] ft_tcdm_rsp_in, ft_tcdm_rsp_out;
+
   // FlooNoC AXI interfaces
   floo_terapool_noc_pkg::floo_req_t  [NumX-1:0][NumY-1:0][West:North] floo_axi_req_out,  floo_axi_req_in;
   floo_terapool_noc_pkg::floo_rsp_t  [NumX-1:0][NumY-1:0][West:North] floo_axi_rsp_out,  floo_axi_rsp_in;
@@ -110,172 +114,240 @@ module terapool_cluster_floonoc_wrapper
   localparam floo_pkg::chimney_cfg_t ChimneyCfgN = floo_pkg::set_ports(floo_pkg::ChimneyDefaultCfg, 1'b0, 1'b0);
   localparam floo_pkg::chimney_cfg_t ChimneyCfgW = floo_pkg::set_ports(floo_pkg::ChimneyDefaultCfg, 1'b1, 1'b0);
 
+  // X-shuffled physical group[x][y] -> logical group id.
+  // y=3:  7   3   11  15
+  // y=2:  6   2   10  14
+  // y=1:  5   1    9  13
+  // y=0:  4   0    8  12
+  //       x=0 x=1 x=2 x=3
+  // The logical group ID is computed from this mapping in gen_groups_x/y.
+
   for (genvar x = 0; x < NumX; x++) begin : gen_groups_x
     for (genvar y = 0; y < NumY; y++) begin : gen_groups_y
-      group_xy_id_t group_id;
-      assign group_id = '{x:x, y:y, port_id:1'b0};
+      localparam int unsigned MeshGroupId     = x * NumY + y;
+      localparam int unsigned ShuffledGroupX  = (x == 0) ? 1 : ((x == 1) ? 0 : x);
+      localparam int unsigned ShuffledGroupId = ShuffledGroupX * NumY + y;
+      localparam int unsigned TcdmGroupId     = (NocTopology == 1) ? ShuffledGroupId : MeshGroupId;
 
-      if (x == 0) begin : gen_hbm_chimney_west
-        // West
-        if (NocTopology == 1) begin
-          assign floo_tcdm_req_in[x][y][West] = floo_tcdm_req_out[NumX-1][y][East];
-          assign floo_tcdm_rsp_in[x][y][West] = floo_tcdm_rsp_out[NumX-1][y][East];
-        end else begin
+      localparam int unsigned TcdmGroupX = TcdmGroupId / NumY;
+      localparam int unsigned TcdmGroupY = TcdmGroupId % NumY;
+
+      group_xy_id_t group_id;
+      assign group_id = '{x:TcdmGroupX, y:TcdmGroupY, port_id:1'b0};
+
+      localparam tcdm_axis_mode_e TcdmEwAdapterMode = (NocTopology == 1) ? (
+        (x == 0) ? TCDM_AXIS_SIDE0_EDGE_BRIDGE :
+        (x == 1) ? TCDM_AXIS_SWAP_DATA_PASS_FT :
+        (x == 2) ? TCDM_AXIS_DEFAULT : TCDM_AXIS_SIDE1_EDGE_BRIDGE
+      ) : TCDM_AXIS_DEFAULT;
+
+      // TCDM-only x-shuffled torus wiring. Long physical links, including the
+      // logical x wrap, use the pipelined feedthrough path inside each group.
+      if (NocTopology == 1) begin : gen_tcdm_x_shuffled_torus
+        if (x == 0) begin : gen_shuffled_tcdm_rows
+          assign floo_tcdm_req_in[0][y][West] = '0;
+          assign floo_tcdm_rsp_in[0][y][West] = '0;
+          assign ft_tcdm_req_in[0][y][TcdmFtWest] = '0;
+          assign ft_tcdm_rsp_in[0][y][TcdmFtWest] = '0;
+
+          assign floo_tcdm_req_in[3][y][East] = '0;
+          assign floo_tcdm_rsp_in[3][y][East] = '0;
+          assign ft_tcdm_req_in[3][y][TcdmFtEast] = '0;
+          assign ft_tcdm_rsp_in[3][y][TcdmFtEast] = '0;
+
+          // Request links in both directions.
+          assign ft_tcdm_req_in[0][y][TcdmFtEast] = floo_tcdm_req_out[1][y][West];
+
+          assign ft_tcdm_req_in[1][y][TcdmFtWest] = floo_tcdm_req_out[0][y][East];
+          assign floo_tcdm_req_in[2][y][West] = ft_tcdm_req_out[1][y][TcdmFtEast];
+
+          assign floo_tcdm_req_in[3][y][West] = floo_tcdm_req_out[2][y][East];
+
+          assign ft_tcdm_req_in[2][y][TcdmFtEast] = ft_tcdm_req_out[3][y][TcdmFtWest];
+          assign floo_tcdm_req_in[1][y][East] = ft_tcdm_req_out[2][y][TcdmFtWest];
+
+          assign floo_tcdm_req_in[1][y][West] = ft_tcdm_req_out[0][y][TcdmFtEast];
+
+          assign ft_tcdm_req_in[1][y][TcdmFtEast] = floo_tcdm_req_out[2][y][West];
+          assign floo_tcdm_req_in[0][y][East] = ft_tcdm_req_out[1][y][TcdmFtWest];
+
+          assign floo_tcdm_req_in[2][y][East] = floo_tcdm_req_out[3][y][West];
+
+          assign ft_tcdm_req_in[2][y][TcdmFtWest] = floo_tcdm_req_out[1][y][East];
+          assign ft_tcdm_req_in[3][y][TcdmFtWest] = ft_tcdm_req_out[2][y][TcdmFtEast];
+
+          // Response links mirror the request links.
+          assign ft_tcdm_rsp_in[0][y][TcdmFtEast] = floo_tcdm_rsp_out[1][y][West];
+
+          assign ft_tcdm_rsp_in[1][y][TcdmFtWest] = floo_tcdm_rsp_out[0][y][East];
+          assign floo_tcdm_rsp_in[2][y][West] = ft_tcdm_rsp_out[1][y][TcdmFtEast];
+
+          assign floo_tcdm_rsp_in[3][y][West] = floo_tcdm_rsp_out[2][y][East];
+
+          assign ft_tcdm_rsp_in[2][y][TcdmFtEast] = ft_tcdm_rsp_out[3][y][TcdmFtWest];
+          assign floo_tcdm_rsp_in[1][y][East] = ft_tcdm_rsp_out[2][y][TcdmFtWest];
+
+          assign floo_tcdm_rsp_in[1][y][West] = ft_tcdm_rsp_out[0][y][TcdmFtEast];
+
+          assign ft_tcdm_rsp_in[1][y][TcdmFtEast] = floo_tcdm_rsp_out[2][y][West];
+          assign floo_tcdm_rsp_in[0][y][East] = ft_tcdm_rsp_out[1][y][TcdmFtWest];
+
+          assign floo_tcdm_rsp_in[2][y][East] = floo_tcdm_rsp_out[3][y][West];
+
+          assign ft_tcdm_rsp_in[2][y][TcdmFtWest] = floo_tcdm_rsp_out[1][y][East];
+          assign ft_tcdm_rsp_in[3][y][TcdmFtWest] = ft_tcdm_rsp_out[2][y][TcdmFtEast];
+        end
+      end else begin : gen_tcdm_mesh
+        assign ft_tcdm_req_in[x][y] = '0;
+        assign ft_tcdm_rsp_in[x][y] = '0;
+
+        if (x == 0) begin
           assign floo_tcdm_req_in[x][y][West] = '0;
           assign floo_tcdm_rsp_in[x][y][West] = '0;
+          assign floo_tcdm_req_in[x][y][East] = floo_tcdm_req_out[x+1][y][West];
+          assign floo_tcdm_rsp_in[x][y][East] = floo_tcdm_rsp_out[x+1][y][West];
+        end else if (x == NumX-1) begin
+          assign floo_tcdm_req_in[x][y][East] = '0;
+          assign floo_tcdm_rsp_in[x][y][East] = '0;
+          assign floo_tcdm_req_in[x][y][West] = floo_tcdm_req_out[x-1][y][East];
+          assign floo_tcdm_rsp_in[x][y][West] = floo_tcdm_rsp_out[x-1][y][East];
+        end else begin
+          assign floo_tcdm_req_in[x][y][East] = floo_tcdm_req_out[x+1][y][West];
+          assign floo_tcdm_rsp_in[x][y][East] = floo_tcdm_rsp_out[x+1][y][West];
+          assign floo_tcdm_req_in[x][y][West] = floo_tcdm_req_out[x-1][y][East];
+          assign floo_tcdm_rsp_in[x][y][West] = floo_tcdm_rsp_out[x-1][y][East];
+        end
+      end
+
+      // The y axis is not shuffled. Keep every y link direct, including the
+      // torus wrap between y=0 and y=NumY-1. No y feedthrough path is used.
+      if (y == 0) begin : gen_tcdm_y_south
+        if (NocTopology == 1) begin : gen_torus_wrap
+          assign floo_tcdm_req_in[x][y][South] = floo_tcdm_req_out[x][NumY-1][North];
+          assign floo_tcdm_rsp_in[x][y][South] = floo_tcdm_rsp_out[x][NumY-1][North];
+        end else begin : gen_no_wrap
+          assign floo_tcdm_req_in[x][y][South] = '0;
+          assign floo_tcdm_rsp_in[x][y][South] = '0;
         end
 
-        // East
-        assign floo_tcdm_req_in[x][y][East] = floo_tcdm_req_out[x+1][y][West];
-        assign floo_tcdm_rsp_in[x][y][East] = floo_tcdm_rsp_out[x+1][y][West];
+        assign floo_tcdm_req_in[x][y][North] = floo_tcdm_req_out[x][y+1][South];
+        assign floo_tcdm_rsp_in[x][y][North] = floo_tcdm_rsp_out[x][y+1][South];
+      end else if (y == NumY-1) begin : gen_tcdm_y_north
+        if (NocTopology == 1) begin : gen_torus_wrap
+          assign floo_tcdm_req_in[x][y][North] = floo_tcdm_req_out[x][0][South];
+          assign floo_tcdm_rsp_in[x][y][North] = floo_tcdm_rsp_out[x][0][South];
+        end else begin : gen_no_wrap
+          assign floo_tcdm_req_in[x][y][North] = '0;
+          assign floo_tcdm_rsp_in[x][y][North] = '0;
+        end
+
+        assign floo_tcdm_req_in[x][y][South] = floo_tcdm_req_out[x][y-1][North];
+        assign floo_tcdm_rsp_in[x][y][South] = floo_tcdm_rsp_out[x][y-1][North];
+      end else begin : gen_tcdm_y_internal
+        assign floo_tcdm_req_in[x][y][North] = floo_tcdm_req_out[x][y+1][South];
+        assign floo_tcdm_rsp_in[x][y][North] = floo_tcdm_rsp_out[x][y+1][South];
+        assign floo_tcdm_req_in[x][y][South] = floo_tcdm_req_out[x][y-1][North];
+        assign floo_tcdm_rsp_in[x][y][South] = floo_tcdm_rsp_out[x][y-1][North];
+      end
+
+      // AXI remains a physical mesh. Only logical group endpoints and external
+      // HBM channel IDs move to match the x-shuffled floorplan.
+      if (x == 0) begin : gen_hbm_chimney_west
 
         // AXI East
         assign floo_axi_req_in[x][y][East]  = floo_axi_req_out[x+1][y][West];
         assign floo_axi_rsp_in[x][y][East]  = floo_axi_rsp_out[x+1][y][West];
         assign floo_axi_wide_in[x][y][East] = floo_axi_wide_out[x+1][y][West];
+
+        localparam int unsigned HbmWestId = (NocTopology == 1) ? 4 + y : y;
+
         // AXI West
-        assign floo_axi_req_in[x][y][West]  = floo_axi_req_i[y];
-        assign floo_axi_rsp_in[x][y][West]  = floo_axi_rsp_i[y];
-        assign floo_axi_wide_in[x][y][West] = floo_axi_wide_i[y];
-        assign floo_axi_wide_o[y]           = floo_axi_wide_out[x][y][West];
-        assign floo_axi_req_o[y]            = floo_axi_req_out[x][y][West];
-        assign floo_axi_rsp_o[y]            = floo_axi_rsp_out[x][y][West];
+        assign floo_axi_req_in[x][y][West]  = floo_axi_req_i[HbmWestId];
+        assign floo_axi_rsp_in[x][y][West]  = floo_axi_rsp_i[HbmWestId];
+        assign floo_axi_wide_in[x][y][West] = floo_axi_wide_i[HbmWestId];
+        assign floo_axi_wide_o[HbmWestId]   = floo_axi_wide_out[x][y][West];
+        assign floo_axi_req_o[HbmWestId]    = floo_axi_req_out[x][y][West];
+        assign floo_axi_rsp_o[HbmWestId]    = floo_axi_rsp_out[x][y][West];
 
       end else if (x == NumX-1) begin : gen_hbm_chimney_east
-        // East
-        if (NocTopology == 1) begin
-          assign floo_tcdm_req_in[x][y][East] = floo_tcdm_req_out[0][y][West];
-          assign floo_tcdm_rsp_in[x][y][East] = floo_tcdm_rsp_out[0][y][West];
-        end else begin
-          assign floo_tcdm_req_in[x][y][East] = '0;
-          assign floo_tcdm_rsp_in[x][y][East] = '0;
-        end
-
-        // West
-        assign floo_tcdm_req_in[x][y][West] = floo_tcdm_req_out[x-1][y][East];
-        assign floo_tcdm_rsp_in[x][y][West] = floo_tcdm_rsp_out[x-1][y][East];
-
         // AXI West
         assign floo_axi_req_in[x][y][West]  = floo_axi_req_out[x-1][y][East];
         assign floo_axi_rsp_in[x][y][West]  = floo_axi_rsp_out[x-1][y][East];
         assign floo_axi_wide_in[x][y][West] = floo_axi_wide_out[x-1][y][East];
 
+        localparam int unsigned HbmEastId = 12 + y;
+
         // AXI East
-        assign floo_axi_req_in[x][y][East]  = floo_axi_req_i[y+12];
-        assign floo_axi_rsp_in[x][y][East]  = floo_axi_rsp_i[y+12];
-        assign floo_axi_wide_in[x][y][East] = floo_axi_wide_i[y+12];
-        assign floo_axi_wide_o[y+12]        = floo_axi_wide_out[x][y][East];
-        assign floo_axi_req_o[y+12]         = floo_axi_req_out[x][y][East];
-        assign floo_axi_rsp_o[y+12]         = floo_axi_rsp_out[x][y][East];
+        assign floo_axi_req_in[x][y][East]  = floo_axi_req_i[HbmEastId];
+        assign floo_axi_rsp_in[x][y][East]  = floo_axi_rsp_i[HbmEastId];
+        assign floo_axi_wide_in[x][y][East] = floo_axi_wide_i[HbmEastId];
+        assign floo_axi_wide_o[HbmEastId]   = floo_axi_wide_out[x][y][East];
+        assign floo_axi_req_o[HbmEastId]    = floo_axi_req_out[x][y][East];
+        assign floo_axi_rsp_o[HbmEastId]    = floo_axi_rsp_out[x][y][East];
 
       end else begin : gen_hor_connections
         // East
-        assign floo_tcdm_req_in[x][y][East] = floo_tcdm_req_out[x+1][y][West];
-        assign floo_tcdm_rsp_in[x][y][East] = floo_tcdm_rsp_out[x+1][y][West];
         assign floo_axi_req_in[x][y][East]  = floo_axi_req_out[x+1][y][West];
         assign floo_axi_rsp_in[x][y][East]  = floo_axi_rsp_out[x+1][y][West];
         assign floo_axi_wide_in[x][y][East] = floo_axi_wide_out[x+1][y][West];
 
         // West
-        assign floo_tcdm_req_in[x][y][West] = floo_tcdm_req_out[x-1][y][East];
-        assign floo_tcdm_rsp_in[x][y][West] = floo_tcdm_rsp_out[x-1][y][East];
         assign floo_axi_req_in[x][y][West]  = floo_axi_req_out[x-1][y][East];
         assign floo_axi_rsp_in[x][y][West]  = floo_axi_rsp_out[x-1][y][East];
         assign floo_axi_wide_in[x][y][West] = floo_axi_wide_out[x-1][y][East];
       end
 
       if (y == 0) begin : gen_hbm_chimney_south
-        // South
-        if (NocTopology == 1) begin
-          assign floo_tcdm_req_in[x][y][South] = floo_tcdm_req_out[x][NumY-1][North];
-          assign floo_tcdm_rsp_in[x][y][South] = floo_tcdm_rsp_out[x][NumY-1][North];
-        end else begin
-          assign floo_tcdm_req_in[x][y][South] = '0;
-          assign floo_tcdm_rsp_in[x][y][South] = '0;
-        end
-
-        // North
-        assign floo_tcdm_req_in [x][y][North] = floo_tcdm_req_out [x][y+1][South];
-        assign floo_tcdm_rsp_in [x][y][North] = floo_tcdm_rsp_out [x][y+1][South];
-
         // AXI North
         assign floo_axi_req_in  [x][y][North] = floo_axi_req_out  [x][y+1][South];
         assign floo_axi_rsp_in  [x][y][North] = floo_axi_rsp_out  [x][y+1][South];
         assign floo_axi_wide_in [x][y][North] = floo_axi_wide_out [x][y+1][South];
 
-        if (x < NumX/2) begin : gen_normal_chimneys
-          // AXI South
-          assign floo_axi_req_in[x][y][South]  = floo_axi_req_i[5-x];
-          assign floo_axi_rsp_in[x][y][South]  = floo_axi_rsp_i[5-x];
-          assign floo_axi_wide_in[x][y][South] = floo_axi_wide_i[5-x];
-          assign floo_axi_wide_o[5-x]          = floo_axi_wide_out[x][y][South];
-          assign floo_axi_req_o[5-x]           = floo_axi_req_out[x][y][South];
-          assign floo_axi_rsp_o[5-x]           = floo_axi_rsp_out[x][y][South];
+        localparam int unsigned HbmSouthId = (NocTopology == 1) ?
+            ((x < 2) ? 1 - x : x + 6) :
+            ((x < 2) ? 5 - x : x + 6);
 
-        end else begin : gen_normal_chimneys_2
-          // AXI South
-          assign floo_axi_req_in[x][y][South]  = floo_axi_req_i[x+6];
-          assign floo_axi_rsp_in[x][y][South]  = floo_axi_rsp_i[x+6];
-          assign floo_axi_wide_in[x][y][South] = floo_axi_wide_i[x+6];
-          assign floo_axi_wide_o[x+6]          = floo_axi_wide_out[x][y][South];
-          assign floo_axi_req_o[x+6]           = floo_axi_req_out[x][y][South];
-          assign floo_axi_rsp_o[x+6]           = floo_axi_rsp_out[x][y][South];
-        end
+        // AXI South
+        assign floo_axi_req_in[x][y][South]  = floo_axi_req_i[HbmSouthId];
+        assign floo_axi_rsp_in[x][y][South]  = floo_axi_rsp_i[HbmSouthId];
+        assign floo_axi_wide_in[x][y][South] = floo_axi_wide_i[HbmSouthId];
+        assign floo_axi_wide_o[HbmSouthId]   = floo_axi_wide_out[x][y][South];
+        assign floo_axi_req_o[HbmSouthId]    = floo_axi_req_out[x][y][South];
+        assign floo_axi_rsp_o[HbmSouthId]    = floo_axi_rsp_out[x][y][South];
 
       end else if (y == NumY-1) begin
-        // TCDM North
-        if (NocTopology == 1) begin
-          assign floo_tcdm_req_in[x][y][North] = floo_tcdm_req_out[x][0][South];
-          assign floo_tcdm_rsp_in[x][y][North] = floo_tcdm_rsp_out[x][0][South];
-        end else begin
-          assign floo_tcdm_req_in[x][y][North] = '0;
-          assign floo_tcdm_rsp_in[x][y][North] = '0;
-        end
-
-        // TCDM South
-        assign floo_tcdm_req_in[x][y][South] = floo_tcdm_req_out[x][y-1][North];
-        assign floo_tcdm_rsp_in[x][y][South] = floo_tcdm_rsp_out[x][y-1][North];
-
         // AXI South
         assign floo_axi_req_in [x][y][South] = floo_axi_req_out [x][y-1][North];
         assign floo_axi_rsp_in [x][y][South] = floo_axi_rsp_out [x][y-1][North];
         assign floo_axi_wide_in[x][y][South] = floo_axi_wide_out[x][y-1][North];
 
-        if (x < NumX/2) begin
-          // AXI North
-          assign floo_axi_req_in [x][y][North] = floo_axi_req_i [x+6];
-          assign floo_axi_rsp_in [x][y][North] = floo_axi_rsp_i [x+6];
-          assign floo_axi_wide_in[x][y][North] = floo_axi_wide_i[x+6];
-          assign floo_axi_wide_o [x+6]         = floo_axi_wide_out[x][y][North];
-          assign floo_axi_req_o  [x+6]         = floo_axi_req_out [x][y][North];
-          assign floo_axi_rsp_o  [x+6]         = floo_axi_rsp_out [x][y][North];
-        end else begin
-          // AXI North
-          assign floo_axi_req_in [x][y][North] = floo_axi_req_i [13-x];
-          assign floo_axi_rsp_in [x][y][North] = floo_axi_rsp_i [13-x];
-          assign floo_axi_wide_in[x][y][North] = floo_axi_wide_i[13-x];
-          assign floo_axi_wide_o [13-x]        = floo_axi_wide_out[x][y][North];
-          assign floo_axi_req_o  [13-x]        = floo_axi_req_out [x][y][North];
-          assign floo_axi_rsp_o  [13-x]        = floo_axi_rsp_out [x][y][North];
-        end
+        localparam int unsigned HbmNorthId = (NocTopology == 1) ?
+            ((x < 2) ? x + 2 : 13 - x) :
+            ((x < 2) ? x + 6 : 13 - x);
+
+        // AXI North
+        assign floo_axi_req_in[x][y][North]  = floo_axi_req_i[HbmNorthId];
+        assign floo_axi_rsp_in[x][y][North]  = floo_axi_rsp_i[HbmNorthId];
+        assign floo_axi_wide_in[x][y][North] = floo_axi_wide_i[HbmNorthId];
+        assign floo_axi_wide_o[HbmNorthId]   = floo_axi_wide_out[x][y][North];
+        assign floo_axi_req_o[HbmNorthId]    = floo_axi_req_out[x][y][North];
+        assign floo_axi_rsp_o[HbmNorthId]    = floo_axi_rsp_out[x][y][North];
 
       end else begin
         // North
-        assign floo_tcdm_req_in [x][y][North] = floo_tcdm_req_out [x][y+1][South];
-        assign floo_tcdm_rsp_in [x][y][North] = floo_tcdm_rsp_out [x][y+1][South];
         assign floo_axi_req_in  [x][y][North] = floo_axi_req_out  [x][y+1][South];
         assign floo_axi_rsp_in  [x][y][North] = floo_axi_rsp_out  [x][y+1][South];
         assign floo_axi_wide_in [x][y][North] = floo_axi_wide_out [x][y+1][South];
 
         // South
-        assign floo_tcdm_req_in [x][y][South] = floo_tcdm_req_out [x][y-1][North];
-        assign floo_tcdm_rsp_in [x][y][South] = floo_tcdm_rsp_out [x][y-1][North];
         assign floo_axi_req_in  [x][y][South] = floo_axi_req_out  [x][y-1][North];
         assign floo_axi_rsp_in  [x][y][South] = floo_axi_rsp_out  [x][y-1][North];
         assign floo_axi_wide_in [x][y][South] = floo_axi_wide_out [x][y-1][North];
       end
 
-      if (PostLayoutGr & (x == 0) & (y == 0)) begin : gen_postly_group
+      // The existing post-layout group has no feedthrough/swap ports, so the
+      // shuffled torus must instantiate the RTL wrapper at every physical slot.
+      if (PostLayoutGr & (NocTopology == 0) & (x == 0) & (y == 0)) begin : gen_postly_group
         mempool_group_floonoc_wrapper_postlayout i_group (
           .clk_i              (clk_i),
           .rst_ni             (rst_ni),
@@ -284,22 +356,22 @@ module terapool_cluster_floonoc_wrapper
           .scan_data_i        (/* Unconnected */),
           .scan_data_o        (/* Unconnected */),
           .group_id_i         (group_id_t'({group_id.x, group_id.y})),
-          .floo_id_i          (id_t'(GroupX0Y0 + x*NumY + y)),
-          .route_table_i      (floo_terapool_noc_pkg::RoutingTables[GroupX0Y0 + x*NumY + y]),
+          .floo_id_i          (id_t'(GroupX0Y0 + TcdmGroupId)),
+          .route_table_i      (floo_terapool_noc_pkg::RoutingTables[GroupX0Y0 + TcdmGroupId]),
           // TCDM Router interface
           .floo_tcdm_req_o    (floo_tcdm_req_out[x][y]),
           .floo_tcdm_rsp_o    (floo_tcdm_rsp_out[x][y]),
           .floo_tcdm_req_i    (floo_tcdm_req_in[x][y]),
           .floo_tcdm_rsp_i    (floo_tcdm_rsp_in[x][y]),
-          .wake_up_i          (wake_up_q[(NumY*x+y)*NumCoresPerGroup +: NumCoresPerGroup]),
-          .ro_cache_ctrl_i    (ro_cache_ctrl_q[(NumY*x+y)]),
+          .wake_up_i          (wake_up_q[TcdmGroupId*NumCoresPerGroup +: NumCoresPerGroup]),
+          .ro_cache_ctrl_i    (ro_cache_ctrl_q[TcdmGroupId]),
           // DMA request
-          .dma_req_i          (dma_req_group_q[(NumY*x+y)]),
-          .dma_req_valid_i    (dma_req_group_q_valid[(NumY*x+y)]),
-          .dma_req_ready_o    (dma_req_group_q_ready[(NumY*x+y)]),
+          .dma_req_i          (dma_req_group_q[TcdmGroupId]),
+          .dma_req_valid_i    (dma_req_group_q_valid[TcdmGroupId]),
+          .dma_req_ready_o    (dma_req_group_q_ready[TcdmGroupId]),
           // DMA status
-          .dma_meta_o_backend_idle_   (dma_meta[(NumY*x+y)][1]),
-          .dma_meta_o_trans_complete_ (dma_meta[(NumY*x+y)][0]),
+          .dma_meta_o_backend_idle_   (dma_meta[TcdmGroupId][1]),
+          .dma_meta_o_trans_complete_ (dma_meta[TcdmGroupId][0]),
           // AXI Router interface
           .floo_axi_req_o     (floo_axi_req_out[x][y]),
           .floo_axi_rsp_o     (floo_axi_rsp_out[x][y]),
@@ -321,21 +393,27 @@ module terapool_cluster_floonoc_wrapper
           .scan_data_i        (/* Unconnected */),
           .scan_data_o        (/* Unconnected */),
           .group_id_i         (group_id_t'({group_id.x, group_id.y})),
-          .floo_id_i          (id_t'(GroupX0Y0 + x*NumY + y)),
-          .route_table_i      (floo_terapool_noc_pkg::RoutingTables[GroupX0Y0 + x*NumY + y]),
+          .floo_id_i          (id_t'(GroupX0Y0 + TcdmGroupId)),
+          .route_table_i      (floo_terapool_noc_pkg::RoutingTables[GroupX0Y0 + TcdmGroupId]),
           // TCDM Router interface
           .floo_tcdm_req_o    (floo_tcdm_req_out[x][y]),
           .floo_tcdm_rsp_o    (floo_tcdm_rsp_out[x][y]),
           .floo_tcdm_req_i    (floo_tcdm_req_in[x][y]),
           .floo_tcdm_rsp_i    (floo_tcdm_rsp_in[x][y]),
-          .wake_up_i          (wake_up_q[(NumY*x+y)*NumCoresPerGroup +: NumCoresPerGroup]),
-          .ro_cache_ctrl_i    (ro_cache_ctrl_q[(NumY*x+y)]),
+          // X-axis TCDM NoC feedthrough and physical-port adapter
+          .ft_tcdm_req_i          (ft_tcdm_req_in[x][y]),
+          .ft_tcdm_req_o          (ft_tcdm_req_out[x][y]),
+          .ft_tcdm_rsp_i          (ft_tcdm_rsp_in[x][y]),
+          .ft_tcdm_rsp_o          (ft_tcdm_rsp_out[x][y]),
+          .tcdm_ew_adapter_mode_i (TcdmEwAdapterMode),
+          .wake_up_i          (wake_up_q[TcdmGroupId*NumCoresPerGroup +: NumCoresPerGroup]),
+          .ro_cache_ctrl_i    (ro_cache_ctrl_q[TcdmGroupId]),
           // DMA request
-          .dma_req_i          (dma_req_group_q[(NumY*x+y)]),
-          .dma_req_valid_i    (dma_req_group_q_valid[(NumY*x+y)]),
-          .dma_req_ready_o    (dma_req_group_q_ready[(NumY*x+y)]),
+          .dma_req_i          (dma_req_group_q[TcdmGroupId]),
+          .dma_req_valid_i    (dma_req_group_q_valid[TcdmGroupId]),
+          .dma_req_ready_o    (dma_req_group_q_ready[TcdmGroupId]),
           // DMA status
-          .dma_meta_o         (dma_meta[(NumY*x+y)]),
+          .dma_meta_o         (dma_meta[TcdmGroupId]),
           // AXI Router interface
           .floo_axi_req_o     (floo_axi_req_out[x][y]),
           .floo_axi_rsp_o     (floo_axi_rsp_out[x][y]),

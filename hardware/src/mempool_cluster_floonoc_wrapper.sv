@@ -290,6 +290,12 @@ module mempool_cluster_floonoc_wrapper
           .floo_tcdm_rsp_o            (floo_tcdm_rsp_out[x][y]),
           .floo_tcdm_req_i            (floo_tcdm_req_in[x][y]),
           .floo_tcdm_rsp_i            (floo_tcdm_rsp_in[x][y]),
+          // Disable the x-axis adapter for the unshuffled MemPool cluster.
+          .ft_tcdm_req_i              ('0),
+          .ft_tcdm_req_o              (),
+          .ft_tcdm_rsp_i              ('0),
+          .ft_tcdm_rsp_o              (),
+          .tcdm_ew_adapter_mode_i     (TCDM_AXIS_DEFAULT),
           .wake_up_i                  (wake_up_q[(NumY*x+y)*NumCoresPerGroup +: NumCoresPerGroup]),
           .ro_cache_ctrl_i            (ro_cache_ctrl_q[NumY*x+y]),
           // DMA request

@@ -57,9 +57,20 @@ module mempool_group_floonoc_wrapper
   output logic                                          dma_req_ready_o,
 
   // DMA status
-  output `STRUCT_PORT(dma_meta_t)                       dma_meta_o
+  output `STRUCT_PORT(dma_meta_t)                       dma_meta_o,
+
+  // X-axis feedthrough ports for req & resp
+  input  floo_tcdm_req_if_t [NumTcdmFtDirections-1:0]  ft_tcdm_req_i,
+  output floo_tcdm_req_if_t [NumTcdmFtDirections-1:0]  ft_tcdm_req_o,
+
+  input  floo_tcdm_rsp_if_t [NumTcdmFtDirections-1:0]  ft_tcdm_rsp_i,
+  output floo_tcdm_rsp_if_t [NumTcdmFtDirections-1:0]  ft_tcdm_rsp_o,
+
+  input  tcdm_axis_mode_e                              tcdm_ew_adapter_mode_i
+
 );
 
+//router direction array <-> physical data port
 // narrow req noc
 `ifdef USE_NARROW_REQ_CHANNEL
   floo_tcdm_rd_req_t [West:North][NumTilesPerGroup-1:0][NumNarrowRemoteReqPortsPerTile-1:0] floo_tcdm_narrow_req_out;
@@ -83,6 +94,7 @@ module mempool_group_floonoc_wrapper
   end
 `endif
 
+// Logical Direction Arrays
 // wide req noc
 floo_tcdm_rdwr_req_t [West:North][NumTilesPerGroup-1:0][NumWideRemoteReqPortsPerTile-1:0] floo_tcdm_wide_req_out;
 logic                [West:North][NumTilesPerGroup-1:0][NumWideRemoteReqPortsPerTile-1:0] floo_tcdm_wide_req_valid_out;
@@ -91,15 +103,228 @@ floo_tcdm_rdwr_req_t [West:North][NumTilesPerGroup-1:0][NumWideRemoteReqPortsPer
 logic                [West:North][NumTilesPerGroup-1:0][NumWideRemoteReqPortsPerTile-1:0] floo_tcdm_wide_req_valid_in;
 logic                [West:North][NumTilesPerGroup-1:0][NumWideRemoteReqPortsPerTile-1:0] floo_tcdm_wide_req_ready_out;
 
-for (genvar i = North; i <= West; i++) begin : gen_tcdm_wide_req_if_i
-  for(genvar j = 0; j < NumTilesPerGroup; j++) begin : gen_tcdm_wide_req_if_j
-    for(genvar k = 0; k < NumWideRemoteReqPortsPerTile; k++) begin : gen_tcdm_wide_req_if_k
-      assign floo_tcdm_req_o[i].floo_tcdm_req[j].wide_req[k].req    = floo_tcdm_wide_req_out      [i][j][k];
-      assign floo_tcdm_req_o[i].floo_tcdm_req[j].wide_req[k].valid  = floo_tcdm_wide_req_valid_out[i][j][k];
-      assign floo_tcdm_req_o[i].floo_tcdm_req[j].wide_req[k].ready  = floo_tcdm_wide_req_ready_out[i][j][k];
-      assign floo_tcdm_wide_req_in        [i][j][k] = floo_tcdm_req_i[i].floo_tcdm_req[j].wide_req[k].req;
-      assign floo_tcdm_wide_req_valid_in  [i][j][k] = floo_tcdm_req_i[i].floo_tcdm_req[j].wide_req[k].valid;
-      assign floo_tcdm_wide_req_ready_in  [i][j][k] = floo_tcdm_req_i[i].floo_tcdm_req[j].wide_req[k].ready;
+// for (genvar i = North; i <= West; i++) begin : gen_tcdm_wide_req_if_i
+//   for(genvar j = 0; j < NumTilesPerGroup; j++) begin : gen_tcdm_wide_req_if_j
+//     for(genvar k = 0; k < NumWideRemoteReqPortsPerTile; k++) begin : gen_tcdm_wide_req_if_k
+//       assign floo_tcdm_req_o[i].floo_tcdm_req[j].wide_req[k].req    = floo_tcdm_wide_req_out      [i][j][k];
+//       assign floo_tcdm_req_o[i].floo_tcdm_req[j].wide_req[k].valid  = floo_tcdm_wide_req_valid_out[i][j][k];
+//       assign floo_tcdm_req_o[i].floo_tcdm_req[j].wide_req[k].ready  = floo_tcdm_wide_req_ready_out[i][j][k];
+//       assign floo_tcdm_wide_req_in        [i][j][k] = floo_tcdm_req_i[i].floo_tcdm_req[j].wide_req[k].req;
+//       assign floo_tcdm_wide_req_valid_in  [i][j][k] = floo_tcdm_req_i[i].floo_tcdm_req[j].wide_req[k].valid;
+//       assign floo_tcdm_wide_req_ready_in  [i][j][k] = floo_tcdm_req_i[i].floo_tcdm_req[j].wide_req[k].ready;
+//     end
+//   end
+// end
+
+//[i][j][k] = [dir][tile][port]
+for (genvar j = 0; j < NumTilesPerGroup; j++) begin : gen_tcdm_wide_req_adapt_j
+  for (genvar k = 0; k < NumWideRemoteReqPortsPerTile; k++) begin : gen_tcdm_wide_req_adapt_k
+
+    logic ft_req_ew_pipe_en;
+    assign ft_req_ew_pipe_en =
+        (tcdm_ew_adapter_mode_i == TCDM_AXIS_DEFAULT) ||
+        (tcdm_ew_adapter_mode_i == TCDM_AXIS_SWAP_DATA_PASS_FT);
+
+    floo_tcdm_rdwr_req_t ft_req_w2e_data;
+    logic ft_req_w2e_valid, ft_req_w2e_ready_i, ft_req_w2e_ready_o;
+
+    tcdm_ft_pipe #(
+      .payload_t (floo_tcdm_rdwr_req_t),
+      .NumStages (TcdmFtReqPipelineStages)
+    ) i_ft_req_w2e_pipe (
+      .clk_i,
+      .rst_ni,
+      .data_i  (ft_tcdm_req_i[TcdmFtWest].floo_tcdm_req[j].wide_req[k].req),
+      .valid_i (ft_tcdm_req_i[TcdmFtWest].floo_tcdm_req[j].wide_req[k].valid & ft_req_ew_pipe_en),
+      .ready_o (ft_req_w2e_ready_o),
+      .data_o  (ft_req_w2e_data),
+      .valid_o (ft_req_w2e_valid),
+      .ready_i (ft_req_w2e_ready_i)
+    );
+
+    floo_tcdm_rdwr_req_t ft_req_e2w_data;
+    logic ft_req_e2w_valid, ft_req_e2w_ready_i, ft_req_e2w_ready_o;
+
+    tcdm_ft_pipe #(
+      .payload_t (floo_tcdm_rdwr_req_t),
+      .NumStages (TcdmFtReqPipelineStages)
+    ) i_ft_req_e2w_pipe (
+      .clk_i,
+      .rst_ni,
+      .data_i  (ft_tcdm_req_i[TcdmFtEast].floo_tcdm_req[j].wide_req[k].req),
+      .valid_i (ft_tcdm_req_i[TcdmFtEast].floo_tcdm_req[j].wide_req[k].valid & ft_req_ew_pipe_en),
+      .ready_o (ft_req_e2w_ready_o),
+      .data_o  (ft_req_e2w_data),
+      .valid_o (ft_req_e2w_valid),
+      .ready_i (ft_req_e2w_ready_i)
+    );
+
+    always_comb begin
+      // Defaults: avoid undriven outputs.
+      floo_tcdm_req_o[West ].floo_tcdm_req[j].wide_req[k] = '0;
+      floo_tcdm_req_o[East ].floo_tcdm_req[j].wide_req[k] = '0;
+      floo_tcdm_req_o[South].floo_tcdm_req[j].wide_req[k] = '0;
+      floo_tcdm_req_o[North].floo_tcdm_req[j].wide_req[k] = '0;
+
+      ft_tcdm_req_o[TcdmFtWest].floo_tcdm_req[j].wide_req[k] = '0;
+      ft_tcdm_req_o[TcdmFtEast].floo_tcdm_req[j].wide_req[k] = '0;
+
+      floo_tcdm_wide_req_in[West ][j][k] = '0;
+      floo_tcdm_wide_req_in[East ][j][k] = '0;
+      floo_tcdm_wide_req_in[South][j][k] = '0;
+      floo_tcdm_wide_req_in[North][j][k] = '0;
+
+      floo_tcdm_wide_req_valid_in[West ][j][k] = 1'b0;
+      floo_tcdm_wide_req_valid_in[East ][j][k] = 1'b0;
+      floo_tcdm_wide_req_valid_in[South][j][k] = 1'b0;
+      floo_tcdm_wide_req_valid_in[North][j][k] = 1'b0;
+
+      floo_tcdm_wide_req_ready_in[West ][j][k] = 1'b0;
+      floo_tcdm_wide_req_ready_in[East ][j][k] = 1'b0;
+      floo_tcdm_wide_req_ready_in[South][j][k] = 1'b0;
+      floo_tcdm_wide_req_ready_in[North][j][k] = 1'b0;
+
+      ft_req_w2e_ready_i = 1'b0;
+      ft_req_e2w_ready_i = 1'b0;
+
+      unique case (tcdm_ew_adapter_mode_i) //to be mutually exclusive
+        TCDM_AXIS_DEFAULT: begin
+          // router West out -> data West out
+          floo_tcdm_req_o[West].floo_tcdm_req[j].wide_req[k].req   = floo_tcdm_wide_req_out[West][j][k];
+          floo_tcdm_req_o[West].floo_tcdm_req[j].wide_req[k].valid = floo_tcdm_wide_req_valid_out[West][j][k];
+          floo_tcdm_wide_req_ready_in[West][j][k]                  = floo_tcdm_req_i[West].floo_tcdm_req[j].wide_req[k].ready;
+
+          // router East out -> data East out
+          floo_tcdm_req_o[East].floo_tcdm_req[j].wide_req[k].req   = floo_tcdm_wide_req_out[East][j][k];
+          floo_tcdm_req_o[East].floo_tcdm_req[j].wide_req[k].valid = floo_tcdm_wide_req_valid_out[East][j][k];
+          floo_tcdm_wide_req_ready_in[East][j][k]                  = floo_tcdm_req_i[East].floo_tcdm_req[j].wide_req[k].ready;
+
+          // data West/East in -> router West/East in
+          floo_tcdm_wide_req_in[West][j][k]                        = floo_tcdm_req_i[West].floo_tcdm_req[j].wide_req[k].req;
+          floo_tcdm_wide_req_valid_in[West][j][k]                  = floo_tcdm_req_i[West].floo_tcdm_req[j].wide_req[k].valid;
+          floo_tcdm_req_o[West].floo_tcdm_req[j].wide_req[k].ready = floo_tcdm_wide_req_ready_out[West][j][k];
+
+          floo_tcdm_wide_req_in[East][j][k]                        = floo_tcdm_req_i[East].floo_tcdm_req[j].wide_req[k].req;
+          floo_tcdm_wide_req_valid_in[East][j][k]                  = floo_tcdm_req_i[East].floo_tcdm_req[j].wide_req[k].valid;
+          floo_tcdm_req_o[East].floo_tcdm_req[j].wide_req[k].ready = floo_tcdm_wide_req_ready_out[East][j][k];
+
+          // feedthrough pass
+          // ft_tcdm_req_o[TcdmFtEast].floo_tcdm_req[j].wide_req[k] = ft_tcdm_req_i[TcdmFtWest].floo_tcdm_req[j].wide_req[k];
+          // ft_tcdm_req_o[TcdmFtWest].floo_tcdm_req[j].wide_req[k] = ft_tcdm_req_i[TcdmFtEast].floo_tcdm_req[j].wide_req[k];
+
+          ft_tcdm_req_o[TcdmFtEast].floo_tcdm_req[j].wide_req[k].req      = ft_req_w2e_data;
+          ft_tcdm_req_o[TcdmFtEast].floo_tcdm_req[j].wide_req[k].valid    = ft_req_w2e_valid;
+          ft_req_w2e_ready_i                                              = ft_tcdm_req_i[TcdmFtEast].floo_tcdm_req[j].wide_req[k].ready;
+          ft_tcdm_req_o[TcdmFtWest].floo_tcdm_req[j].wide_req[k].ready    = ft_req_w2e_ready_o;
+
+          ft_tcdm_req_o[TcdmFtWest].floo_tcdm_req[j].wide_req[k].req      = ft_req_e2w_data;
+          ft_tcdm_req_o[TcdmFtWest].floo_tcdm_req[j].wide_req[k].valid    = ft_req_e2w_valid;
+          ft_req_e2w_ready_i                                              = ft_tcdm_req_i[TcdmFtWest].floo_tcdm_req[j].wide_req[k].ready;
+          ft_tcdm_req_o[TcdmFtEast].floo_tcdm_req[j].wide_req[k].ready    = ft_req_e2w_ready_o;
+        end
+
+        TCDM_AXIS_SWAP_DATA_PASS_FT: begin
+          // router West out -> data East out
+          floo_tcdm_req_o[East].floo_tcdm_req[j].wide_req[k].req   = floo_tcdm_wide_req_out[West][j][k];
+          floo_tcdm_req_o[East].floo_tcdm_req[j].wide_req[k].valid = floo_tcdm_wide_req_valid_out[West][j][k];
+          floo_tcdm_wide_req_ready_in[West][j][k]                  = floo_tcdm_req_i[East].floo_tcdm_req[j].wide_req[k].ready;
+
+          // router East out -> data West out
+          floo_tcdm_req_o[West].floo_tcdm_req[j].wide_req[k].req   = floo_tcdm_wide_req_out[East][j][k];
+          floo_tcdm_req_o[West].floo_tcdm_req[j].wide_req[k].valid = floo_tcdm_wide_req_valid_out[East][j][k];
+          floo_tcdm_wide_req_ready_in[East][j][k]                  = floo_tcdm_req_i[West].floo_tcdm_req[j].wide_req[k].ready;
+
+          // data East in -> router West in
+          floo_tcdm_wide_req_in[West][j][k]                        = floo_tcdm_req_i[East].floo_tcdm_req[j].wide_req[k].req;
+          floo_tcdm_wide_req_valid_in[West][j][k]                  = floo_tcdm_req_i[East].floo_tcdm_req[j].wide_req[k].valid;
+          floo_tcdm_req_o[East].floo_tcdm_req[j].wide_req[k].ready = floo_tcdm_wide_req_ready_out[West][j][k];
+
+          // data West in -> router East in
+          floo_tcdm_wide_req_in[East][j][k]                        = floo_tcdm_req_i[West].floo_tcdm_req[j].wide_req[k].req;
+          floo_tcdm_wide_req_valid_in[East][j][k]                  = floo_tcdm_req_i[West].floo_tcdm_req[j].wide_req[k].valid;
+          floo_tcdm_req_o[West].floo_tcdm_req[j].wide_req[k].ready = floo_tcdm_wide_req_ready_out[East][j][k];
+
+          // feedthrough pass
+          // ft_tcdm_req_o[TcdmFtEast].floo_tcdm_req[j].wide_req[k] = ft_tcdm_req_i[TcdmFtWest].floo_tcdm_req[j].wide_req[k];
+          // ft_tcdm_req_o[TcdmFtWest].floo_tcdm_req[j].wide_req[k] = ft_tcdm_req_i[TcdmFtEast].floo_tcdm_req[j].wide_req[k];
+
+          ft_tcdm_req_o[TcdmFtEast].floo_tcdm_req[j].wide_req[k].req      = ft_req_w2e_data;
+          ft_tcdm_req_o[TcdmFtEast].floo_tcdm_req[j].wide_req[k].valid    = ft_req_w2e_valid;
+          ft_req_w2e_ready_i                                        = ft_tcdm_req_i[TcdmFtEast].floo_tcdm_req[j].wide_req[k].ready;
+          ft_tcdm_req_o[TcdmFtWest].floo_tcdm_req[j].wide_req[k].ready    = ft_req_w2e_ready_o;
+
+          ft_tcdm_req_o[TcdmFtWest].floo_tcdm_req[j].wide_req[k].req      = ft_req_e2w_data;
+          ft_tcdm_req_o[TcdmFtWest].floo_tcdm_req[j].wide_req[k].valid    = ft_req_e2w_valid;
+          ft_req_e2w_ready_i                                        = ft_tcdm_req_i[TcdmFtWest].floo_tcdm_req[j].wide_req[k].ready;
+          ft_tcdm_req_o[TcdmFtEast].floo_tcdm_req[j].wide_req[k].ready    = ft_req_e2w_ready_o;
+        end
+
+        TCDM_AXIS_SIDE0_EDGE_BRIDGE: begin
+          // EW side0 = West, side1 = East.
+          // router West out -> ft East out
+          ft_tcdm_req_o[TcdmFtEast].floo_tcdm_req[j].wide_req[k].req     = floo_tcdm_wide_req_out[West][j][k];
+          ft_tcdm_req_o[TcdmFtEast].floo_tcdm_req[j].wide_req[k].valid   = floo_tcdm_wide_req_valid_out[West][j][k];
+          floo_tcdm_wide_req_ready_in[West][j][k]                  = ft_tcdm_req_i[TcdmFtEast].floo_tcdm_req[j].wide_req[k].ready;
+
+          //ft East in -> router West in
+          floo_tcdm_wide_req_in[West][j][k]                        = ft_tcdm_req_i[TcdmFtEast].floo_tcdm_req[j].wide_req[k].req;
+          floo_tcdm_wide_req_valid_in[West][j][k]                  = ft_tcdm_req_i[TcdmFtEast].floo_tcdm_req[j].wide_req[k].valid;
+          ft_tcdm_req_o[TcdmFtEast].floo_tcdm_req[j].wide_req[k].ready   = floo_tcdm_wide_req_ready_out[West][j][k];
+
+          // default side: router East out -> data East out
+          floo_tcdm_req_o[East].floo_tcdm_req[j].wide_req[k].req   = floo_tcdm_wide_req_out[East][j][k];
+          floo_tcdm_req_o[East].floo_tcdm_req[j].wide_req[k].valid = floo_tcdm_wide_req_valid_out[East][j][k];
+          floo_tcdm_wide_req_ready_in[East][j][k]                  = floo_tcdm_req_i[East].floo_tcdm_req[j].wide_req[k].ready;
+
+          // default side: data East in -> router East in
+          floo_tcdm_wide_req_in[East][j][k]                        = floo_tcdm_req_i[East].floo_tcdm_req[j].wide_req[k].req;
+          floo_tcdm_wide_req_valid_in[East][j][k]                  = floo_tcdm_req_i[East].floo_tcdm_req[j].wide_req[k].valid;
+          floo_tcdm_req_o[East].floo_tcdm_req[j].wide_req[k].ready = floo_tcdm_wide_req_ready_out[East][j][k];
+        end
+
+        TCDM_AXIS_SIDE1_EDGE_BRIDGE: begin
+          // EW side0 = West, side1 = East.
+          // router East out -> ft West out
+          ft_tcdm_req_o[TcdmFtWest].floo_tcdm_req[j].wide_req[k].req     = floo_tcdm_wide_req_out[East][j][k];
+          ft_tcdm_req_o[TcdmFtWest].floo_tcdm_req[j].wide_req[k].valid   = floo_tcdm_wide_req_valid_out[East][j][k];
+          floo_tcdm_wide_req_ready_in[East][j][k]                  = ft_tcdm_req_i[TcdmFtWest].floo_tcdm_req[j].wide_req[k].ready;
+
+          // ft West in -> router East in
+          floo_tcdm_wide_req_in[East][j][k]                        = ft_tcdm_req_i[TcdmFtWest].floo_tcdm_req[j].wide_req[k].req;
+          floo_tcdm_wide_req_valid_in[East][j][k]                  = ft_tcdm_req_i[TcdmFtWest].floo_tcdm_req[j].wide_req[k].valid;
+          ft_tcdm_req_o[TcdmFtWest].floo_tcdm_req[j].wide_req[k].ready   = floo_tcdm_wide_req_ready_out[East][j][k];
+
+          // default side: router West out -> data West out
+          floo_tcdm_req_o[West].floo_tcdm_req[j].wide_req[k].req   = floo_tcdm_wide_req_out[West][j][k];
+          floo_tcdm_req_o[West].floo_tcdm_req[j].wide_req[k].valid = floo_tcdm_wide_req_valid_out[West][j][k];
+          floo_tcdm_wide_req_ready_in[West][j][k]                  = floo_tcdm_req_i[West].floo_tcdm_req[j].wide_req[k].ready;
+
+          // default side: data West in -> router West in
+          floo_tcdm_wide_req_in[West][j][k]                        = floo_tcdm_req_i[West].floo_tcdm_req[j].wide_req[k].req;
+          floo_tcdm_wide_req_valid_in[West][j][k]                  = floo_tcdm_req_i[West].floo_tcdm_req[j].wide_req[k].valid;
+          floo_tcdm_req_o[West].floo_tcdm_req[j].wide_req[k].ready = floo_tcdm_wide_req_ready_out[West][j][k];
+        end
+
+        default: begin
+        end
+      endcase
+
+      // The y axis is not shuffled: connect South and North directly.
+      floo_tcdm_req_o[South].floo_tcdm_req[j].wide_req[k].req   = floo_tcdm_wide_req_out[South][j][k];
+      floo_tcdm_req_o[South].floo_tcdm_req[j].wide_req[k].valid = floo_tcdm_wide_req_valid_out[South][j][k];
+      floo_tcdm_wide_req_ready_in[South][j][k]                  = floo_tcdm_req_i[South].floo_tcdm_req[j].wide_req[k].ready;
+
+      floo_tcdm_req_o[North].floo_tcdm_req[j].wide_req[k].req   = floo_tcdm_wide_req_out[North][j][k];
+      floo_tcdm_req_o[North].floo_tcdm_req[j].wide_req[k].valid = floo_tcdm_wide_req_valid_out[North][j][k];
+      floo_tcdm_wide_req_ready_in[North][j][k]                  = floo_tcdm_req_i[North].floo_tcdm_req[j].wide_req[k].ready;
+
+      floo_tcdm_wide_req_in[South][j][k]                        = floo_tcdm_req_i[South].floo_tcdm_req[j].wide_req[k].req;
+      floo_tcdm_wide_req_valid_in[South][j][k]                  = floo_tcdm_req_i[South].floo_tcdm_req[j].wide_req[k].valid;
+      floo_tcdm_req_o[South].floo_tcdm_req[j].wide_req[k].ready = floo_tcdm_wide_req_ready_out[South][j][k];
+
+      floo_tcdm_wide_req_in[North][j][k]                        = floo_tcdm_req_i[North].floo_tcdm_req[j].wide_req[k].req;
+      floo_tcdm_wide_req_valid_in[North][j][k]                  = floo_tcdm_req_i[North].floo_tcdm_req[j].wide_req[k].valid;
+      floo_tcdm_req_o[North].floo_tcdm_req[j].wide_req[k].ready = floo_tcdm_wide_req_ready_out[North][j][k];
     end
   end
 end
@@ -112,15 +337,222 @@ floo_tcdm_resp_t     [West:North][NumTilesPerGroup-1:0][NumRemoteRespPortsPerTil
 logic                [West:North][NumTilesPerGroup-1:0][NumRemoteRespPortsPerTile-1:1] floo_tcdm_resp_valid_in;
 logic                [West:North][NumTilesPerGroup-1:0][NumRemoteRespPortsPerTile-1:1] floo_tcdm_resp_ready_out;
 
-for (genvar i = North; i <= West; i++) begin : gen_tcdm_resp_if_i
-  for(genvar j = 0; j < NumTilesPerGroup; j++) begin : gen_tcdm_resp_if_j
-    for(genvar k = 1; k < NumRemoteRespPortsPerTile; k++) begin : gen_tcdm_resp_if_k
-      assign floo_tcdm_rsp_o[i].floo_tcdm_resp[j][k].resp   = floo_tcdm_resp_out       [i][j][k];
-      assign floo_tcdm_rsp_o[i].floo_tcdm_resp[j][k].valid  = floo_tcdm_resp_valid_out [i][j][k];
-      assign floo_tcdm_rsp_o[i].floo_tcdm_resp[j][k].ready  = floo_tcdm_resp_ready_out [i][j][k];
-      assign floo_tcdm_resp_in        [i][j][k] = floo_tcdm_rsp_i[i].floo_tcdm_resp[j][k].resp;
-      assign floo_tcdm_resp_valid_in  [i][j][k] = floo_tcdm_rsp_i[i].floo_tcdm_resp[j][k].valid;
-      assign floo_tcdm_resp_ready_in  [i][j][k] = floo_tcdm_rsp_i[i].floo_tcdm_resp[j][k].ready;
+// for (genvar i = North; i <= West; i++) begin : gen_tcdm_resp_if_i
+//   for(genvar j = 0; j < NumTilesPerGroup; j++) begin : gen_tcdm_resp_if_j
+//     for(genvar k = 1; k < NumRemoteRespPortsPerTile; k++) begin : gen_tcdm_resp_if_k
+//       assign floo_tcdm_rsp_o[i].floo_tcdm_resp[j][k].resp   = floo_tcdm_resp_out       [i][j][k];
+//       assign floo_tcdm_rsp_o[i].floo_tcdm_resp[j][k].valid  = floo_tcdm_resp_valid_out [i][j][k];
+//       assign floo_tcdm_rsp_o[i].floo_tcdm_resp[j][k].ready  = floo_tcdm_resp_ready_out [i][j][k];
+//       assign floo_tcdm_resp_in        [i][j][k] = floo_tcdm_rsp_i[i].floo_tcdm_resp[j][k].resp;
+//       assign floo_tcdm_resp_valid_in  [i][j][k] = floo_tcdm_rsp_i[i].floo_tcdm_resp[j][k].valid;
+//       assign floo_tcdm_resp_ready_in  [i][j][k] = floo_tcdm_rsp_i[i].floo_tcdm_resp[j][k].ready;
+//     end
+//   end
+// end
+
+for (genvar j = 0; j < NumTilesPerGroup; j++) begin : gen_tcdm_resp_adapt_j
+  for (genvar k = 1; k < NumRemoteRespPortsPerTile; k++) begin : gen_tcdm_resp_adapt_k
+
+    logic ft_rsp_ew_pipe_en;
+    assign ft_rsp_ew_pipe_en =
+        (tcdm_ew_adapter_mode_i == TCDM_AXIS_DEFAULT) ||
+        (tcdm_ew_adapter_mode_i == TCDM_AXIS_SWAP_DATA_PASS_FT);
+
+    floo_tcdm_resp_t ft_rsp_w2e_data, ft_rsp_e2w_data;
+    logic ft_rsp_w2e_valid, ft_rsp_w2e_ready_i, ft_rsp_w2e_ready_o;
+    logic ft_rsp_e2w_valid, ft_rsp_e2w_ready_i, ft_rsp_e2w_ready_o;
+
+    tcdm_ft_pipe #(
+        .payload_t(floo_tcdm_resp_t),
+        .NumStages(TcdmFtRspPipelineStages)
+      ) i_ft_rsp_w2e_pipe (
+      .clk_i, .rst_ni,
+      .data_i(ft_tcdm_rsp_i[TcdmFtWest].floo_tcdm_resp[j][k].resp),
+      .valid_i(ft_tcdm_rsp_i[TcdmFtWest].floo_tcdm_resp[j][k].valid & ft_rsp_ew_pipe_en),
+      .ready_o(ft_rsp_w2e_ready_o),
+      .data_o(ft_rsp_w2e_data),
+      .valid_o(ft_rsp_w2e_valid),
+      .ready_i(ft_rsp_w2e_ready_i)
+    );
+
+    tcdm_ft_pipe #(
+        .payload_t(floo_tcdm_resp_t),
+        .NumStages(TcdmFtRspPipelineStages)
+      ) i_ft_rsp_e2w_pipe (
+      .clk_i, .rst_ni,
+      .data_i(ft_tcdm_rsp_i[TcdmFtEast].floo_tcdm_resp[j][k].resp),
+      .valid_i(ft_tcdm_rsp_i[TcdmFtEast].floo_tcdm_resp[j][k].valid & ft_rsp_ew_pipe_en),
+      .ready_o(ft_rsp_e2w_ready_o),
+      .data_o(ft_rsp_e2w_data),
+      .valid_o(ft_rsp_e2w_valid),
+      .ready_i(ft_rsp_e2w_ready_i)
+    );
+
+    always_comb begin
+      // Defaults: avoid undriven outputs.
+      floo_tcdm_rsp_o[West ].floo_tcdm_resp[j][k] = '0;
+      floo_tcdm_rsp_o[East ].floo_tcdm_resp[j][k] = '0;
+      floo_tcdm_rsp_o[South].floo_tcdm_resp[j][k] = '0;
+      floo_tcdm_rsp_o[North].floo_tcdm_resp[j][k] = '0;
+
+      ft_tcdm_rsp_o[TcdmFtWest].floo_tcdm_resp[j][k] = '0;
+      ft_tcdm_rsp_o[TcdmFtEast].floo_tcdm_resp[j][k] = '0;
+
+      floo_tcdm_resp_in[West ][j][k] = '0;
+      floo_tcdm_resp_in[East ][j][k] = '0;
+      floo_tcdm_resp_in[South][j][k] = '0;
+      floo_tcdm_resp_in[North][j][k] = '0;
+
+      floo_tcdm_resp_valid_in[West ][j][k] = 1'b0;
+      floo_tcdm_resp_valid_in[East ][j][k] = 1'b0;
+      floo_tcdm_resp_valid_in[South][j][k] = 1'b0;
+      floo_tcdm_resp_valid_in[North][j][k] = 1'b0;
+
+      floo_tcdm_resp_ready_in[West ][j][k] = 1'b0;
+      floo_tcdm_resp_ready_in[East ][j][k] = 1'b0;
+      floo_tcdm_resp_ready_in[South][j][k] = 1'b0;
+      floo_tcdm_resp_ready_in[North][j][k] = 1'b0;
+
+      ft_rsp_w2e_ready_i = 1'b0;
+      ft_rsp_e2w_ready_i = 1'b0;
+
+      unique case (tcdm_ew_adapter_mode_i) //to be mutually exclusive
+        TCDM_AXIS_DEFAULT: begin
+          // router West out -> data West out
+          floo_tcdm_rsp_o[West].floo_tcdm_resp[j][k].resp   = floo_tcdm_resp_out[West][j][k];
+          floo_tcdm_rsp_o[West].floo_tcdm_resp[j][k].valid  = floo_tcdm_resp_valid_out[West][j][k];
+          floo_tcdm_resp_ready_in[West][j][k]               = floo_tcdm_rsp_i[West].floo_tcdm_resp[j][k].ready;
+
+          // router East out -> data East out
+          floo_tcdm_rsp_o[East].floo_tcdm_resp[j][k].resp   = floo_tcdm_resp_out[East][j][k];
+          floo_tcdm_rsp_o[East].floo_tcdm_resp[j][k].valid  = floo_tcdm_resp_valid_out[East][j][k];
+          floo_tcdm_resp_ready_in[East][j][k]               = floo_tcdm_rsp_i[East].floo_tcdm_resp[j][k].ready;
+
+          // data West/East in -> router West/East in
+          floo_tcdm_resp_in[West][j][k]                     = floo_tcdm_rsp_i[West].floo_tcdm_resp[j][k].resp;
+          floo_tcdm_resp_valid_in[West][j][k]               = floo_tcdm_rsp_i[West].floo_tcdm_resp[j][k].valid;
+          floo_tcdm_rsp_o[West].floo_tcdm_resp[j][k].ready  = floo_tcdm_resp_ready_out[West][j][k];
+
+          floo_tcdm_resp_in[East][j][k]                     = floo_tcdm_rsp_i[East].floo_tcdm_resp[j][k].resp;
+          floo_tcdm_resp_valid_in[East][j][k]               = floo_tcdm_rsp_i[East].floo_tcdm_resp[j][k].valid;
+          floo_tcdm_rsp_o[East].floo_tcdm_resp[j][k].ready  = floo_tcdm_resp_ready_out[East][j][k];
+
+          // feedthrough pass
+          // ft_tcdm_rsp_o[TcdmFtEast].floo_tcdm_resp[j][k] = ft_tcdm_rsp_i[TcdmFtWest].floo_tcdm_resp[j][k];
+          // ft_tcdm_rsp_o[TcdmFtWest].floo_tcdm_resp[j][k] = ft_tcdm_rsp_i[TcdmFtEast].floo_tcdm_resp[j][k];
+          ft_tcdm_rsp_o[TcdmFtEast].floo_tcdm_resp[j][k].resp  = ft_rsp_w2e_data;
+          ft_tcdm_rsp_o[TcdmFtEast].floo_tcdm_resp[j][k].valid = ft_rsp_w2e_valid;
+          ft_rsp_w2e_ready_i                             = ft_tcdm_rsp_i[TcdmFtEast].floo_tcdm_resp[j][k].ready;
+          ft_tcdm_rsp_o[TcdmFtWest].floo_tcdm_resp[j][k].ready = ft_rsp_w2e_ready_o;
+
+          ft_tcdm_rsp_o[TcdmFtWest].floo_tcdm_resp[j][k].resp  = ft_rsp_e2w_data;
+          ft_tcdm_rsp_o[TcdmFtWest].floo_tcdm_resp[j][k].valid = ft_rsp_e2w_valid;
+          ft_rsp_e2w_ready_i                             = ft_tcdm_rsp_i[TcdmFtWest].floo_tcdm_resp[j][k].ready;
+          ft_tcdm_rsp_o[TcdmFtEast].floo_tcdm_resp[j][k].ready = ft_rsp_e2w_ready_o;
+
+        end
+
+        TCDM_AXIS_SWAP_DATA_PASS_FT: begin
+          // router West out -> data East out
+          floo_tcdm_rsp_o[East].floo_tcdm_resp[j][k].resp   = floo_tcdm_resp_out[West][j][k];
+          floo_tcdm_rsp_o[East].floo_tcdm_resp[j][k].valid  = floo_tcdm_resp_valid_out[West][j][k];
+          floo_tcdm_resp_ready_in[West][j][k]               = floo_tcdm_rsp_i[East].floo_tcdm_resp[j][k].ready;
+
+          // router East out -> data West out
+          floo_tcdm_rsp_o[West].floo_tcdm_resp[j][k].resp   = floo_tcdm_resp_out[East][j][k];
+          floo_tcdm_rsp_o[West].floo_tcdm_resp[j][k].valid  = floo_tcdm_resp_valid_out[East][j][k];
+          floo_tcdm_resp_ready_in[East][j][k]               = floo_tcdm_rsp_i[West].floo_tcdm_resp[j][k].ready;
+
+          // data East in -> router West in
+          floo_tcdm_resp_in[West][j][k]                     = floo_tcdm_rsp_i[East].floo_tcdm_resp[j][k].resp;
+          floo_tcdm_resp_valid_in[West][j][k]               = floo_tcdm_rsp_i[East].floo_tcdm_resp[j][k].valid;
+          floo_tcdm_rsp_o[East].floo_tcdm_resp[j][k].ready  = floo_tcdm_resp_ready_out[West][j][k];
+
+          // data West in -> router East in
+          floo_tcdm_resp_in[East][j][k]                     = floo_tcdm_rsp_i[West].floo_tcdm_resp[j][k].resp;
+          floo_tcdm_resp_valid_in[East][j][k]               = floo_tcdm_rsp_i[West].floo_tcdm_resp[j][k].valid;
+          floo_tcdm_rsp_o[West].floo_tcdm_resp[j][k].ready  = floo_tcdm_resp_ready_out[East][j][k];
+
+          // feedthrough pass
+          // ft_tcdm_rsp_o[TcdmFtEast].floo_tcdm_resp[j][k] = ft_tcdm_rsp_i[TcdmFtWest].floo_tcdm_resp[j][k];
+          // ft_tcdm_rsp_o[TcdmFtWest].floo_tcdm_resp[j][k] = ft_tcdm_rsp_i[TcdmFtEast].floo_tcdm_resp[j][k];
+          ft_tcdm_rsp_o[TcdmFtEast].floo_tcdm_resp[j][k].resp  = ft_rsp_w2e_data;
+          ft_tcdm_rsp_o[TcdmFtEast].floo_tcdm_resp[j][k].valid = ft_rsp_w2e_valid;
+          ft_rsp_w2e_ready_i                             = ft_tcdm_rsp_i[TcdmFtEast].floo_tcdm_resp[j][k].ready;
+          ft_tcdm_rsp_o[TcdmFtWest].floo_tcdm_resp[j][k].ready = ft_rsp_w2e_ready_o;
+
+          ft_tcdm_rsp_o[TcdmFtWest].floo_tcdm_resp[j][k].resp  = ft_rsp_e2w_data;
+          ft_tcdm_rsp_o[TcdmFtWest].floo_tcdm_resp[j][k].valid = ft_rsp_e2w_valid;
+          ft_rsp_e2w_ready_i                             = ft_tcdm_rsp_i[TcdmFtWest].floo_tcdm_resp[j][k].ready;
+          ft_tcdm_rsp_o[TcdmFtEast].floo_tcdm_resp[j][k].ready = ft_rsp_e2w_ready_o;
+        end
+
+        TCDM_AXIS_SIDE0_EDGE_BRIDGE: begin
+          // EW side0 = West, side1 = East.
+          // router West out -> ft East out
+          ft_tcdm_rsp_o[TcdmFtEast].floo_tcdm_resp[j][k].resp   = floo_tcdm_resp_out[West][j][k];
+          ft_tcdm_rsp_o[TcdmFtEast].floo_tcdm_resp[j][k].valid  = floo_tcdm_resp_valid_out[West][j][k];
+          floo_tcdm_resp_ready_in[West][j][k]             = ft_tcdm_rsp_i[TcdmFtEast].floo_tcdm_resp[j][k].ready;
+
+          // ft East in -> router West in
+          floo_tcdm_resp_in[West][j][k]                   = ft_tcdm_rsp_i[TcdmFtEast].floo_tcdm_resp[j][k].resp;
+          floo_tcdm_resp_valid_in[West][j][k]             = ft_tcdm_rsp_i[TcdmFtEast].floo_tcdm_resp[j][k].valid;
+          ft_tcdm_rsp_o[TcdmFtEast].floo_tcdm_resp[j][k].ready  = floo_tcdm_resp_ready_out[West][j][k];
+
+          // default side: router East out -> data East out
+          floo_tcdm_rsp_o[East].floo_tcdm_resp[j][k].resp  = floo_tcdm_resp_out[East][j][k];
+          floo_tcdm_rsp_o[East].floo_tcdm_resp[j][k].valid = floo_tcdm_resp_valid_out[East][j][k];
+          floo_tcdm_resp_ready_in[East][j][k]              = floo_tcdm_rsp_i[East].floo_tcdm_resp[j][k].ready;
+
+          // default side: data East in -> router East in
+          floo_tcdm_resp_in[East][j][k]                    = floo_tcdm_rsp_i[East].floo_tcdm_resp[j][k].resp;
+          floo_tcdm_resp_valid_in[East][j][k]              = floo_tcdm_rsp_i[East].floo_tcdm_resp[j][k].valid;
+          floo_tcdm_rsp_o[East].floo_tcdm_resp[j][k].ready = floo_tcdm_resp_ready_out[East][j][k];
+        end
+
+        TCDM_AXIS_SIDE1_EDGE_BRIDGE: begin
+          // EW side0 = West, side1 = East.
+          // router East out -> ft West out
+          ft_tcdm_rsp_o[TcdmFtWest].floo_tcdm_resp[j][k].resp   = floo_tcdm_resp_out[East][j][k];
+          ft_tcdm_rsp_o[TcdmFtWest].floo_tcdm_resp[j][k].valid  = floo_tcdm_resp_valid_out[East][j][k];
+          floo_tcdm_resp_ready_in[East][j][k]             = ft_tcdm_rsp_i[TcdmFtWest].floo_tcdm_resp[j][k].ready;
+
+          // ft West in -> router East in
+          floo_tcdm_resp_in[East][j][k]                   = ft_tcdm_rsp_i[TcdmFtWest].floo_tcdm_resp[j][k].resp;
+          floo_tcdm_resp_valid_in[East][j][k]             = ft_tcdm_rsp_i[TcdmFtWest].floo_tcdm_resp[j][k].valid;
+          ft_tcdm_rsp_o[TcdmFtWest].floo_tcdm_resp[j][k].ready  = floo_tcdm_resp_ready_out[East][j][k];
+
+          // default side: router West out -> data West out
+          floo_tcdm_rsp_o[West].floo_tcdm_resp[j][k].resp  = floo_tcdm_resp_out[West][j][k];
+          floo_tcdm_rsp_o[West].floo_tcdm_resp[j][k].valid = floo_tcdm_resp_valid_out[West][j][k];
+          floo_tcdm_resp_ready_in[West][j][k]              = floo_tcdm_rsp_i[West].floo_tcdm_resp[j][k].ready;
+
+          // default side: data West in -> router West in
+          floo_tcdm_resp_in[West][j][k]                    = floo_tcdm_rsp_i[West].floo_tcdm_resp[j][k].resp;
+          floo_tcdm_resp_valid_in[West][j][k]              = floo_tcdm_rsp_i[West].floo_tcdm_resp[j][k].valid;
+          floo_tcdm_rsp_o[West].floo_tcdm_resp[j][k].ready = floo_tcdm_resp_ready_out[West][j][k];
+        end
+
+        default: begin
+        end
+      endcase
+
+      // The y axis is not shuffled: connect South and North directly.
+      floo_tcdm_rsp_o[South].floo_tcdm_resp[j][k].resp  = floo_tcdm_resp_out[South][j][k];
+      floo_tcdm_rsp_o[South].floo_tcdm_resp[j][k].valid = floo_tcdm_resp_valid_out[South][j][k];
+      floo_tcdm_resp_ready_in[South][j][k]              = floo_tcdm_rsp_i[South].floo_tcdm_resp[j][k].ready;
+
+      floo_tcdm_rsp_o[North].floo_tcdm_resp[j][k].resp  = floo_tcdm_resp_out[North][j][k];
+      floo_tcdm_rsp_o[North].floo_tcdm_resp[j][k].valid = floo_tcdm_resp_valid_out[North][j][k];
+      floo_tcdm_resp_ready_in[North][j][k]              = floo_tcdm_rsp_i[North].floo_tcdm_resp[j][k].ready;
+
+      floo_tcdm_resp_in[South][j][k]                    = floo_tcdm_rsp_i[South].floo_tcdm_resp[j][k].resp;
+      floo_tcdm_resp_valid_in[South][j][k]              = floo_tcdm_rsp_i[South].floo_tcdm_resp[j][k].valid;
+      floo_tcdm_rsp_o[South].floo_tcdm_resp[j][k].ready = floo_tcdm_resp_ready_out[South][j][k];
+
+      floo_tcdm_resp_in[North][j][k]                    = floo_tcdm_rsp_i[North].floo_tcdm_resp[j][k].resp;
+      floo_tcdm_resp_valid_in[North][j][k]              = floo_tcdm_rsp_i[North].floo_tcdm_resp[j][k].valid;
+      floo_tcdm_rsp_o[North].floo_tcdm_resp[j][k].ready = floo_tcdm_resp_ready_out[North][j][k];
     end
   end
 end
@@ -809,6 +1241,7 @@ for (genvar i = 0; i < NumTilesPerGroup; i++) begin : gen_router_router_i
         .InFifoDepth      (mempool_pkg::NumRouterInFifoDepth                  ), // Input buffer depth
         .OutFifoDepth     (mempool_pkg::NumRouterOutFifoDepth                 ), // Output buffer depth, can try to set it to 0 for -1 cycle latency
         .RouteAlgo        (IdTable                                            ),
+        .NoLoopback       (1'b0                                               ),
         .VcImpl           (VcPreemptValid                                     ), // suppress StableValid warning
         .id_t             (routing_table_pkg::routing_rule_addr_t             ),
         .NumAddrRules     (NumGroups                                          ),
@@ -875,6 +1308,7 @@ for (genvar i = 0; i < NumTilesPerGroup; i++) begin : gen_router_router_i
         .InFifoDepth      (mempool_pkg::NumRouterInFifoDepth                  ), // Input buffer depth
         .OutFifoDepth     (mempool_pkg::NumRouterOutFifoDepth                 ), // Output buffer depth, can try to set it to 0 for -1 cycle latency
         .RouteAlgo        (IdTable                                            ),
+        .NoLoopback       (1'b0                                               ),
         .VcImpl           (VcPreemptValid                                     ), // suppress StableValid warning
         .id_t             (routing_table_pkg::routing_rule_addr_t             ),
         .NumAddrRules     (NumGroups                                          ),
@@ -940,6 +1374,7 @@ for (genvar i = 0; i < NumTilesPerGroup; i++) begin : gen_router_router_i
         .InFifoDepth      (mempool_pkg::NumRouterInFifoDepth                  ), // Input buffer depth
         .OutFifoDepth     (mempool_pkg::NumRouterOutFifoDepth                 ), // Output buffer depth, can try to set it to 0 for -1 cycle latency
         .RouteAlgo        (IdTable                                            ),
+        .NoLoopback       (1'b0                                               ),
         .VcImpl           (VcPreemptValid                                     ), // suppress StableValid warning
         .id_t             (routing_table_pkg::routing_rule_addr_t             ),
         .NumAddrRules     (NumGroups                                          ),

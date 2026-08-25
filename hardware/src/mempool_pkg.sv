@@ -297,6 +297,12 @@ package mempool_pkg;
     group_id_t src_group_id; // FlooNoC Added
   } tcdm_slave_resp_t;
 
+  localparam integer unsigned TcdmFtReqPipelineStages =
+  `ifdef TCDM_FT_REQ_PIPELINE_STAGES `TCDM_FT_REQ_PIPELINE_STAGES `else 1 `endif;
+
+  localparam integer unsigned TcdmFtRspPipelineStages =
+  `ifdef TCDM_FT_RSP_PIPELINE_STAGES `TCDM_FT_RSP_PIPELINE_STAGES `else 1 `endif;
+
   /********************
    *  DMA PARAMETERS  *
    *******************/
@@ -347,6 +353,22 @@ package mempool_pkg;
   localparam integer unsigned SpmBankIdRemap = `ifdef SPM_BANK_ID_REMAP `SPM_BANK_ID_REMAP `else 0 `endif;
   localparam integer unsigned TileIdRemap = `ifdef TILE_ID_REMAP `TILE_ID_REMAP `else 0 `endif;
   localparam integer unsigned RouterRemapGroupSize = `ifdef NOC_ROUTER_REMAP_GROUP_SIZE `NOC_ROUTER_REMAP_GROUP_SIZE `else 2 `endif;
+
+  typedef enum logic [1:0] {
+    TCDM_AXIS_DEFAULT,
+    TCDM_AXIS_SWAP_DATA_PASS_FT,
+    TCDM_AXIS_SIDE0_EDGE_BRIDGE,
+    TCDM_AXIS_SIDE1_EDGE_BRIDGE
+  } tcdm_axis_mode_e;
+
+  typedef enum logic {
+    TcdmFtWest,
+    TcdmFtEast
+  } tcdm_ft_direction_e;
+
+  localparam integer unsigned NumTcdmFtDirections = 2;
+
+  // X-axis adapter: side0 = West, side1 = East.
 
   // FlooNoC group id types for XY routing
   typedef logic [idx_width(NumX)-1:0] group_x_id_t;

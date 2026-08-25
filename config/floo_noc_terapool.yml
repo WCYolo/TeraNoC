@@ -156,82 +156,176 @@ routers:
     degree: 5
 
 connections:
+  # X-shuffled logical group endpoints attached to physical router positions.
+  # physical (x,y) contains logical group id:
+  # y=3:  7   3   11  15
+  # y=2:  6   2   10  14
+  # y=1:  5   1    9  13
+  # y=0:  4   0    8  12
   - src: "group"
     dst: "group_router"
-    src_range:
-    - [0, 3]
-    - [0, 3]
-    dst_range:
-    - [0, 3]
-    - [0, 3]
+    src_idx: [1, 0]
+    dst_idx: [0, 0]
     dst_dir: "Eject"
+
+  - src: "group"
+    dst: "group_router"
+    src_idx: [0, 0]
+    dst_idx: [1, 0]
+    dst_dir: "Eject"
+
+  - src: "group"
+    dst: "group_router"
+    src_idx: [2, 0]
+    dst_idx: [2, 0]
+    dst_dir: "Eject"
+
+  - src: "group"
+    dst: "group_router"
+    src_idx: [3, 0]
+    dst_idx: [3, 0]
+    dst_dir: "Eject"
+
+  - src: "group"
+    dst: "group_router"
+    src_idx: [1, 1]
+    dst_idx: [0, 1]
+    dst_dir: "Eject"
+
+  - src: "group"
+    dst: "group_router"
+    src_idx: [0, 1]
+    dst_idx: [1, 1]
+    dst_dir: "Eject"
+
+  - src: "group"
+    dst: "group_router"
+    src_idx: [2, 1]
+    dst_idx: [2, 1]
+    dst_dir: "Eject"
+
+  - src: "group"
+    dst: "group_router"
+    src_idx: [3, 1]
+    dst_idx: [3, 1]
+    dst_dir: "Eject"
+
+  - src: "group"
+    dst: "group_router"
+    src_idx: [1, 2]
+    dst_idx: [0, 2]
+    dst_dir: "Eject"
+
+  - src: "group"
+    dst: "group_router"
+    src_idx: [0, 2]
+    dst_idx: [1, 2]
+    dst_dir: "Eject"
+
+  - src: "group"
+    dst: "group_router"
+    src_idx: [2, 2]
+    dst_idx: [2, 2]
+    dst_dir: "Eject"
+
+  - src: "group"
+    dst: "group_router"
+    src_idx: [3, 2]
+    dst_idx: [3, 2]
+    dst_dir: "Eject"
+
+  - src: "group"
+    dst: "group_router"
+    src_idx: [1, 3]
+    dst_idx: [0, 3]
+    dst_dir: "Eject"
+
+  - src: "group"
+    dst: "group_router"
+    src_idx: [0, 3]
+    dst_idx: [1, 3]
+    dst_dir: "Eject"
+
+  - src: "group"
+    dst: "group_router"
+    src_idx: [2, 3]
+    dst_idx: [2, 3]
+    dst_dir: "Eject"
+
+  - src: "group"
+    dst: "group_router"
+    src_idx: [3, 3]
+    dst_idx: [3, 3]
+    dst_dir: "Eject"
+
   # HBM West
-  - src: "hbm0"
+  - src: "hbm4"
     dst: "group_router"
     dst_idx: [0, 0]
     dst_dir: "West"
-  - src: "hbm1"
+  - src: "host_hbm5_peri"
     dst: "group_router"
     dst_idx: [0, 1]
     dst_dir: "West"
-  - src: "hbm2"
+  - src: "hbm6"
     dst: "group_router"
     dst_idx: [0, 2]
     dst_dir: "West"
-  - src: "hbm3"
+  - src: "hbm7"
     dst: "group_router"
     dst_idx: [0, 3]
     dst_dir: "West"
+
   # HBM North
-  - src: "hbm6"
+  - src: "hbm2"
     dst: "group_router"
     dst_idx: [0, 3]
     dst_dir: "North"
-  - src: "hbm7"
+  - src: "hbm3"
     dst: "group_router"
     dst_idx: [1, 3]
-    dst_dir: "North"
-  # HBM North
-  - src: "hbm10"
-    dst: "group_router"
-    dst_idx: [3, 3]
     dst_dir: "North"
   - src: "hbm11"
     dst: "group_router"
     dst_idx: [2, 3]
     dst_dir: "North"
-  # HBM East
-  - src: "hbm15"
+  - src: "hbm10"
     dst: "group_router"
     dst_idx: [3, 3]
-    dst_dir: "East"
-  - src: "hbm14"
+    dst_dir: "North"
+
+  # HBM East
+  - src: "hbm12"
     dst: "group_router"
-    dst_idx: [3, 2]
+    dst_idx: [3, 0]
     dst_dir: "East"
   - src: "hbm13"
     dst: "group_router"
     dst_idx: [3, 1]
     dst_dir: "East"
-  - src: "hbm12"
+  - src: "hbm14"
     dst: "group_router"
-    dst_idx: [3, 0]
+    dst_idx: [3, 2]
     dst_dir: "East"
-  # HBM South
-  - src: "hbm9"
+  - src: "hbm15"
     dst: "group_router"
-    dst_idx: [3, 0]
+    dst_idx: [3, 3]
+    dst_dir: "East"
+
+  # HBM South
+  - src: "hbm1"
+    dst: "group_router"
+    dst_idx: [0, 0]
+    dst_dir: "South"
+  - src: "hbm0"
+    dst: "group_router"
+    dst_idx: [1, 0]
     dst_dir: "South"
   - src: "hbm8"
     dst: "group_router"
     dst_idx: [2, 0]
     dst_dir: "South"
-  - src: "hbm4"
+  - src: "hbm9"
     dst: "group_router"
-    dst_idx: [1, 0]
-    dst_dir: "South"
-  # Special
-  - src: "host_hbm5_peri"
-    dst: "group_router"
-    dst_idx: [0, 0]
+    dst_idx: [3, 0]
     dst_dir: "South"

@@ -37,11 +37,11 @@ num_x          ?= 4
 
 # Topology
 # 0: 2D mesh, 1: torus
-noc_topology ?= 0
+noc_topology ?= 1
 
 # Routing algorithm
 # 0: xy, 1: id_table
-noc_routing_algorithm ?= 0
+noc_routing_algorithm ?= 1
 
 # NoC remapping configuration
 # 0: no remapping, 1: req remapping, 2: resp remapping 3: req+resp remapping
@@ -92,6 +92,10 @@ noc_router_output_fifo_dep ?= 2
 
 # Router remapping xbar size configuration
 noc_router_remap_group_size ?= 4
+
+# TCDM feedthrough pipeline stages. Set to 0 to bypass.
+tcdm_ft_req_pipeline_stages ?= 1
+tcdm_ft_rsp_pipeline_stages ?= 1
 
 ###########################
 ## 3. AXI and DMA Config

@@ -206,6 +206,12 @@ vlog_defs += -DNOC_ROUTER_INPUT_FIFO_DEP=$(noc_router_input_fifo_dep)
 vlog_defs += -DNOC_ROUTER_OUTPUT_FIFO_DEP=$(noc_router_output_fifo_dep)
 vlog_defs += -DNOC_ROUTER_REMAP_GROUP_SIZE=$(noc_router_remap_group_size)
 
+#-----------------------------------
+# TCDM Feedthrough Pipeline Stages
+#-----------------------------------
+vlog_defs += -DTCDM_FT_REQ_PIPELINE_STAGES=$(tcdm_ft_req_pipeline_stages)
+vlog_defs += -DTCDM_FT_RSP_PIPELINE_STAGES=$(tcdm_ft_rsp_pipeline_stages)
+
 # ============================================================================
 # Verilator: C++ Preprocessor Defines ##
 # ============================================================================
